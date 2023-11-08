@@ -263,8 +263,18 @@ def download_datasets(args):
     tfds.download.add_checksums_dir('../data/checksums/')
     download_manager = tfds.download.download_manager.DownloadManager(download_dir='../data/', 
                                                        extract_dir=args.input_directory)
-    data_url = 'https://drive.google.com/uc?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V&export=download'
-    download_manager.download_and_extract(data_url)
+    data_url = ('https://drive.google.com/uc?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V&export=download' +
+        '&confirm=t&uuid=afbc362d-9d52-472a-832b-c2af331a8d5b')
+    try:
+        download_manager.download_and_extract(data_url)
+    except Exception as e:
+        print("Download of datasets failed. If this issues persists, try downloading the dataset yourself "
+              "from: https://drive.google.com/file/d/1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V/view."
+              "(For more information see the README.md of this project.)")
+        print("Underlying error:")
+        print(e)
+        sys.exit(1)
+
     path = os.path.join(args.input_directory, 
                         'ZIP.ucid_1bF5sSVjxTx-P5wxn87nxWn_V_export_downloadR9Cwhunev5CvJ-ic__'
                         'HawxhTtGOlSdcCrro4fxfEI8A', 
