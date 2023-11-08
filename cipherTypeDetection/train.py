@@ -178,8 +178,7 @@ def create_model():
         return [model_ffnn, model_nb]
     return model_
 
-
-if __name__ == "__main__":
+def parse_arguments():
     parser = argparse.ArgumentParser(
         description='CANN Ciphertype Detection Neuronal Network Training Script', 
         formatter_class=argparse.RawTextHelpFormatter)
@@ -250,122 +249,39 @@ if __name__ == "__main__":
     parser.add_argument('--extend_model', default=None, type=str,
                         help='Load a trained model from a file and use it as basis for the new training.')
 
-    args = parser.parse_args()
-    for arg in vars(args):
-        print("{:23s}= {:s}".format(arg, str(getattr(args, arg))))
-    m = os.path.splitext(args.model_name)
-    if len(os.path.splitext(args.model_name)) != 2 or os.path.splitext(args.model_name)[1] != '.h5':
-        print('ERROR: The model name must have the ".h5" extension!', file=sys.stderr)
-        sys.exit(1)
-    args.input_directory = os.path.abspath(args.input_directory)
-    args.ciphers = args.ciphers.lower()
-    architecture = args.architecture
-    cipher_types = args.ciphers.split(',')
-    extend_model = args.extend_model
-    if extend_model is not None:
-        if architecture not in ('FFNN', 'CNN', 'LSTM'):
-            print('ERROR: Models with the architecture %s can not be extended!' % architecture,
-                  file=sys.stderr)
-            sys.exit(1)
-        if len(os.path.splitext(extend_model)) != 2 or os.path.splitext(extend_model)[1] != '.h5':
-            print('ERROR: The extended model name must have the ".h5" extension!', file=sys.stderr)
-            sys.exit(1)
+    return parser.parse_args()
+    
+def should_download_datasets(args):
+    """Determines if the plaintext datasets should be loaded"""
+    return (args.download_dataset and 
+            not os.path.exists(args.input_directory) and 
+            args.input_directory == os.path.abspath('../data/gutenberg_en'))
 
-    if config.MTC3 in cipher_types:
-        del cipher_types[cipher_types.index(config.MTC3)]
-        cipher_types.append(config.CIPHER_TYPES[0])
-        cipher_types.append(config.CIPHER_TYPES[1])
-        cipher_types.append(config.CIPHER_TYPES[2])
-        cipher_types.append(config.CIPHER_TYPES[3])
-        cipher_types.append(config.CIPHER_TYPES[4])
-    elif config.ACA in cipher_types:
-        del cipher_types[cipher_types.index(config.ACA)]
-        cipher_types.append(config.CIPHER_TYPES[0])
-        cipher_types.append(config.CIPHER_TYPES[1])
-        cipher_types.append(config.CIPHER_TYPES[2])
-        cipher_types.append(config.CIPHER_TYPES[3])
-        cipher_types.append(config.CIPHER_TYPES[4])
-        cipher_types.append(config.CIPHER_TYPES[5])
-        cipher_types.append(config.CIPHER_TYPES[6])
-        cipher_types.append(config.CIPHER_TYPES[7])
-        cipher_types.append(config.CIPHER_TYPES[8])
-        cipher_types.append(config.CIPHER_TYPES[9])
-        cipher_types.append(config.CIPHER_TYPES[10])
-        cipher_types.append(config.CIPHER_TYPES[11])
-        cipher_types.append(config.CIPHER_TYPES[12])
-        cipher_types.append(config.CIPHER_TYPES[13])
-        cipher_types.append(config.CIPHER_TYPES[14])
-        cipher_types.append(config.CIPHER_TYPES[15])
-        cipher_types.append(config.CIPHER_TYPES[16])
-        cipher_types.append(config.CIPHER_TYPES[17])
-        cipher_types.append(config.CIPHER_TYPES[18])
-        cipher_types.append(config.CIPHER_TYPES[19])
-        cipher_types.append(config.CIPHER_TYPES[20])
-        cipher_types.append(config.CIPHER_TYPES[21])
-        cipher_types.append(config.CIPHER_TYPES[22])
-        cipher_types.append(config.CIPHER_TYPES[23])
-        cipher_types.append(config.CIPHER_TYPES[24])
-        cipher_types.append(config.CIPHER_TYPES[25])
-        cipher_types.append(config.CIPHER_TYPES[26])
-        cipher_types.append(config.CIPHER_TYPES[27])
-        cipher_types.append(config.CIPHER_TYPES[28])
-        cipher_types.append(config.CIPHER_TYPES[29])
-        cipher_types.append(config.CIPHER_TYPES[30])
-        cipher_types.append(config.CIPHER_TYPES[31])
-        cipher_types.append(config.CIPHER_TYPES[32])
-        cipher_types.append(config.CIPHER_TYPES[33])
-        cipher_types.append(config.CIPHER_TYPES[34])
-        cipher_types.append(config.CIPHER_TYPES[35])
-        cipher_types.append(config.CIPHER_TYPES[36])
-        cipher_types.append(config.CIPHER_TYPES[37])
-        cipher_types.append(config.CIPHER_TYPES[38])
-        cipher_types.append(config.CIPHER_TYPES[39])
-        cipher_types.append(config.CIPHER_TYPES[40])
-        cipher_types.append(config.CIPHER_TYPES[41])
-        cipher_types.append(config.CIPHER_TYPES[42])
-        cipher_types.append(config.CIPHER_TYPES[43])
-        cipher_types.append(config.CIPHER_TYPES[44])
-        cipher_types.append(config.CIPHER_TYPES[45])
-        cipher_types.append(config.CIPHER_TYPES[46])
-        cipher_types.append(config.CIPHER_TYPES[47])
-        cipher_types.append(config.CIPHER_TYPES[48])
-        cipher_types.append(config.CIPHER_TYPES[49])
-        cipher_types.append(config.CIPHER_TYPES[50])
-        cipher_types.append(config.CIPHER_TYPES[51])
-        cipher_types.append(config.CIPHER_TYPES[52])
-        cipher_types.append(config.CIPHER_TYPES[53])
-        cipher_types.append(config.CIPHER_TYPES[54])
-        cipher_types.append(config.CIPHER_TYPES[55])
-    config.CIPHER_TYPES = cipher_types
-    if args.train_dataset_size * args.dataset_workers > args.max_iter:
-        print("ERROR: --train_dataset_size * --dataset_workers must not be bigger than --max_iter. "
-              "In this case it was %d > %d" % 
-                  (args.train_dataset_size * args.dataset_workers, args.max_iter), 
-              file=sys.stderr)
-        sys.exit(1)
+def download_datasets(args):
+    """Downloads plaintexts and saves them in the input_directory"""
+    print("Downloading Datsets...")
+    tfds.download.add_checksums_dir('../data/checksums/')
+    download_manager = tfds.download.download_manager.DownloadManager(download_dir='../data/', 
+                                                       extract_dir=args.input_directory)
+    data_url = 'https://drive.google.com/uc?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V&export=download'
+    download_manager.download_and_extract(data_url)
+    path = os.path.join(args.input_directory, 
+                        'ZIP.ucid_1bF5sSVjxTx-P5wxn87nxWn_V_export_downloadR9Cwhunev5CvJ-ic__'
+                        'HawxhTtGOlSdcCrro4fxfEI8A', 
+                        os.path.basename(args.input_directory))
+    dir_name = os.listdir(path)
+    for name in dir_name:
+        p = Path(os.path.join(path, name))
+        parent_dir = p.parents[2]
+        p.rename(parent_dir / p.name)
+    os.rmdir(path)
+    os.rmdir(os.path.dirname(path))
+    print("Datasets Downloaded.")
 
-    if (args.download_dataset and 
-        not os.path.exists(args.input_directory) and 
-        args.input_directory == os.path.abspath('../data/gutenberg_en')):
-        print("Downloading Datsets...")
-        tfds.download.add_checksums_dir('../data/checksums/')
-        download_manager = tfds.download.download_manager.DownloadManager(download_dir='../data/', 
-                                                           extract_dir=args.input_directory)
-        data_url = 'https://drive.google.com/uc?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V&export=download'
-        download_manager.download_and_extract(data_url)
-        path = os.path.join(args.input_directory, 
-                            'ZIP.ucid_1bF5sSVjxTx-P5wxn87nxWn_V_export_downloadR9Cwhunev5CvJ-ic__'
-                            'HawxhTtGOlSdcCrro4fxfEI8A', 
-                            os.path.basename(args.input_directory))
-        dir_name = os.listdir(path)
-        for name in dir_name:
-            p = Path(os.path.join(path, name))
-            parent_dir = p.parents[2]
-            p.rename(parent_dir / p.name)
-        os.rmdir(path)
-        os.rmdir(os.path.dirname(path))
-        print("Datasets Downloaded.")
-
+def load_datasets_from_disk():
+    """Loads existing plaintexts from input_directory and transforms them into datasets for
+    training and testing.
+    """
     print("Loading Datasets...")
     plaintext_files = []
     dir_name = os.listdir(args.input_directory)
@@ -386,7 +302,11 @@ if __name__ == "__main__":
               "KEY_LENGTHS in config.py. The current key_lengths_count is %d" % 
                   train_ds.key_lengths_count, file=sys.stderr)
     print("Datasets loaded.\n")
-
+    return train_ds, test_ds
+    
+# TODO: Better name!
+def create_model_for_hardware_config(extend_model):
+    """Creates models depending on the GPU count and on extend_model"""
     print('Creating model...')
 
     gpu_count = (len(tf.config.list_physical_devices('GPU')) +
@@ -407,7 +327,10 @@ if __name__ == "__main__":
             model.summary()
 
     print('Model created.\n')
-
+    return model
+    
+def train_model(model):
+    """Trains the model"""
     print('Training model...')
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir='../data/logs', update_freq='epoch')
     early_stopping_callback = MiniBatchEarlyStopping(
@@ -520,11 +443,15 @@ if __name__ == "__main__":
             process.terminate()
 
     elapsed_training_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
-    print('Finished training in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
+    training_stats = 'Finished training in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
         elapsed_training_time.days, elapsed_training_time.seconds // 3600, 
         (elapsed_training_time.seconds // 60) % 60,
-        elapsed_training_time.seconds % 60, train_iter, train_epoch))
-
+        elapsed_training_time.seconds % 60, train_iter, train_epoch)
+    print(training_stats)
+    return early_stopping_callback, train_iter, training_stats
+        
+def save_model(model, args):
+    """Saves the model"""
     print('Saving model...')
     if args.model_name == 'm.h5':
         i = 1
@@ -551,7 +478,9 @@ if __name__ == "__main__":
     if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
         shutil.move('../data/logs', '../data/' + model_name.split('.')[0] + '_tensorboard_logs')
     print('Model saved.\n')
-
+    
+def predict_test_data(model, args, early_stopping_callback, train_iter):
+    """Testing the predictions of the model"""
     print('Predicting test data...\n')
     start_time = time.time()
     correct = [0]*len(config.CIPHER_TYPES)
@@ -632,13 +561,72 @@ if __name__ == "__main__":
     else:
         t = str(correct_all / total_len_prediction)
     print('Total: %s\n' % t)
-    print('Finished training in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
-        elapsed_training_time.days, elapsed_training_time.seconds // 3600, 
-        (elapsed_training_time.seconds // 60) % 60,
-        elapsed_training_time.seconds % 60, train_iter, train_epoch))
-    print('Prediction time: %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.' % (
+
+    prediction_stats = 'Prediction time: %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.' % (
         elapsed_prediction_time.days, elapsed_prediction_time.seconds // 3600, 
         (elapsed_prediction_time.seconds // 60) % 60,
-        elapsed_prediction_time.seconds % 60, test_iter, test_epoch))
+        elapsed_prediction_time.seconds % 60, test_iter, test_epoch)
+    
+    return prediction_stats, incorrect
+
+def expand_cipher_groups(cipher_types):
+    """Turn cipher group identifiers (ACA, MTC3) into a list of their ciphers"""
+    expanded = cipher_types
+    if config.MTC3 in expanded:
+        del expanded[expanded.index(config.MTC3)]
+        for i in range(5):
+            expanded.append(config.CIPHER_TYPES[i])
+    elif config.ACA in expanded:
+        del expanded[expanded.index(config.ACA)]
+        for i in range(56):
+            expanded.append(config.CIPHER_TYPES[i])
+    return expanded
+
+if __name__ == "__main__":
+    args = parse_arguments()
+    for arg in vars(args):
+        print("{:23s}= {:s}".format(arg, str(getattr(args, arg))))
+
+    m = os.path.splitext(args.model_name)
+    if len(os.path.splitext(args.model_name)) != 2 or os.path.splitext(args.model_name)[1] != '.h5':
+        print('ERROR: The model name must have the ".h5" extension!', file=sys.stderr)
+        sys.exit(1)
+
+    args.input_directory = os.path.abspath(args.input_directory)
+    args.ciphers = args.ciphers.lower()
+    architecture = args.architecture
+    cipher_types = args.ciphers.split(',')
+
+    extend_model = args.extend_model
+    if extend_model is not None:
+        if architecture not in ('FFNN', 'CNN', 'LSTM'):
+            print('ERROR: Models with the architecture %s can not be extended!' % architecture,
+                  file=sys.stderr)
+            sys.exit(1)
+        if len(os.path.splitext(extend_model)) != 2 or os.path.splitext(extend_model)[1] != '.h5':
+            print('ERROR: The extended model name must have the ".h5" extension!', file=sys.stderr)
+            sys.exit(1)
+
+    cipher_types = expand_cipher_groups(cipher_types)
+            
+    config.CIPHER_TYPES = cipher_types
+    if args.train_dataset_size * args.dataset_workers > args.max_iter:
+        print("ERROR: --train_dataset_size * --dataset_workers must not be bigger than --max_iter. "
+              "In this case it was %d > %d" % 
+                  (args.train_dataset_size * args.dataset_workers, args.max_iter), 
+              file=sys.stderr)
+        sys.exit(1)
+
+    if should_download_datasets(args):
+        download_datasets(args)
+
+    train_ds, test_ds = load_datasets_from_disk()
+    model = create_model_for_hardware_config(extend_model)
+    early_stopping_callback, train_iter, training_stats = train_model(model)
+    save_model(model)
+    prediction_stats, incorrect = predict_test_data(model, args, early_stopping_callback, train_iter)
+    
+    print(training_stats)
+    print(prediction_stats)
 
     print("Incorrect prediction counts: %s" % incorrect)
