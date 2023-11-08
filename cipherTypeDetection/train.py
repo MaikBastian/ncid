@@ -45,7 +45,8 @@ def str2bool(v):
 def create_model():
     global architecture
     optimizer = Adam(
-        learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, epsilon=config.epsilon, amsgrad=config.amsgrad)
+        learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, 
+        epsilon=config.epsilon, amsgrad=config.amsgrad)
     # optimizer = Adamax()
     model_ = None
 
@@ -84,8 +85,8 @@ def create_model():
         for _ in range(config.hidden_layers):
             model_.add(tf.keras.layers.Dense(hidden_layer_size, activation='relu', use_bias=True))
         model_.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=["accuracy", SparseTopKCategoricalAccuracy(
-            k=3, name="k3_accuracy")])
+        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
+                       metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
 
     # CNN
     if architecture == 'CNN':
@@ -93,15 +94,16 @@ def create_model():
         config.PAD_INPUT = True
         model_ = tf.keras.Sequential()
         model_.add(tf.keras.layers.Conv1D(
-            filters=config.filters, kernel_size=config.kernel_size, input_shape=(args.max_train_len, 1), activation='relu'))
+                   filters=config.filters, kernel_size=config.kernel_size, 
+                   input_shape=(args.max_train_len, 1), activation='relu'))
         for _ in range(config.layers - 1):
             model_.add(tf.keras.layers.Conv1D(filters=config.filters, kernel_size=config.kernel_size, activation='relu'))
         # model_.add(tf.keras.layers.Dropout(0.2))
         model_.add(tf.keras.layers.MaxPooling1D(pool_size=2))
         model_.add(tf.keras.layers.Flatten())
         model_.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=["accuracy", SparseTopKCategoricalAccuracy(
-            k=3, name="k3_accuracy")])
+        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
+                       metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
 
     # LSTM
     if architecture == 'LSTM':
@@ -114,8 +116,8 @@ def create_model():
         # model_.add(tf.keras.layers.Dropout(0.2))
         model_.add(tf.keras.layers.Flatten())
         model_.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=["accuracy", SparseTopKCategoricalAccuracy(
-            k=3, name="k3_accuracy")])
+        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
+                       metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
 
     # Decision Tree
     if architecture == 'DT':
@@ -127,14 +129,18 @@ def create_model():
 
     # Random Forest
     if architecture == 'RF':
-        model_ = RandomForestClassifier(n_estimators=config.n_estimators, criterion=config.criterion, bootstrap=config.bootstrap, n_jobs=30,
-                                        max_features=config.max_features, max_depth=30, min_samples_split=config.min_samples_split,
+        model_ = RandomForestClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
+                                        bootstrap=config.bootstrap, n_jobs=30,
+                                        max_features=config.max_features, max_depth=30, 
+                                        min_samples_split=config.min_samples_split,
                                         min_samples_leaf=config.min_samples_leaf)
 
     # Extra Trees
     if architecture == 'ET':
-        model_ = ExtraTreesClassifier(n_estimators=config.n_estimators, criterion=config.criterion, bootstrap=config.bootstrap, n_jobs=30,
-                                      max_features=config.max_features, max_depth=30, min_samples_split=config.min_samples_split,
+        model_ = ExtraTreesClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
+                                      bootstrap=config.bootstrap, n_jobs=30,
+                                      max_features=config.max_features, max_depth=30, 
+                                      min_samples_split=config.min_samples_split,
                                       min_samples_leaf=config.min_samples_leaf)
 
     # Transformer
@@ -156,8 +162,8 @@ def create_model():
         outputs = tf.keras.layers.Dense(output_layer_size, activation="softmax")(x)
 
         model_ = tf.keras.Model(inputs=inputs, outputs=outputs)
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=["accuracy", SparseTopKCategoricalAccuracy(
-            k=3, name="k3_accuracy")])
+        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
+                       metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
 
     # FFNN, NB
     if architecture == "[FFNN,NB]":
@@ -175,7 +181,8 @@ def create_model():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description='CANN Ciphertype Detection Neuronal Network Training Script', formatter_class=argparse.RawTextHelpFormatter)
+        description='CANN Ciphertype Detection Neuronal Network Training Script', 
+        formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('--batch_size', default=128, type=int,
                         help='Batch size for training.')
     parser.add_argument('--train_dataset_size', default=16000, type=int,
@@ -226,8 +233,9 @@ if __name__ == "__main__":
     parser.add_argument('--max_test_len', default=-1, type=int,
                         help='The maximum length of a plaintext to be encrypted in testing. \n'
                              'If this argument is set to -1 no upper limit is used.')
-    parser.add_argument('--architecture', default='FFNN', type=str, choices=['FFNN', 'CNN', 'LSTM', 'DT', 'NB', 'RF', 'ET', 'Transformer',
-                        '[FFNN,NB]'],
+    parser.add_argument('--architecture', default='FFNN', type=str, 
+                        choices=['FFNN', 'CNN', 'LSTM', 'DT', 'NB', 'RF', 'ET', 'Transformer',
+                                 '[FFNN,NB]'],
                         help='The architecture to be used for training. \n'
                              'Possible values are:\n'
                              '- FFNN\n'
@@ -256,7 +264,8 @@ if __name__ == "__main__":
     extend_model = args.extend_model
     if extend_model is not None:
         if architecture not in ('FFNN', 'CNN', 'LSTM'):
-            print('ERROR: Models with the architecture %s can not be extended!' % architecture, file=sys.stderr)
+            print('ERROR: Models with the architecture %s can not be extended!' % architecture,
+                  file=sys.stderr)
             sys.exit(1)
         if len(os.path.splitext(extend_model)) != 2 or os.path.splitext(extend_model)[1] != '.h5':
             print('ERROR: The extended model name must have the ".h5" extension!', file=sys.stderr)
@@ -330,17 +339,24 @@ if __name__ == "__main__":
     config.CIPHER_TYPES = cipher_types
     if args.train_dataset_size * args.dataset_workers > args.max_iter:
         print("ERROR: --train_dataset_size * --dataset_workers must not be bigger than --max_iter. "
-              "In this case it was %d > %d" % (args.train_dataset_size * args.dataset_workers, args.max_iter), file=sys.stderr)
+              "In this case it was %d > %d" % 
+                  (args.train_dataset_size * args.dataset_workers, args.max_iter), 
+              file=sys.stderr)
         sys.exit(1)
 
-    if args.download_dataset and not os.path.exists(args.input_directory) and args.input_directory == os.path.abspath(
-            '../data/gutenberg_en'):
+    if (args.download_dataset and 
+        not os.path.exists(args.input_directory) and 
+        args.input_directory == os.path.abspath('../data/gutenberg_en')):
         print("Downloading Datsets...")
         tfds.download.add_checksums_dir('../data/checksums/')
-        download_manager = tfds.download.download_manager.DownloadManager(download_dir='../data/', extract_dir=args.input_directory)
-        download_manager.download_and_extract('https://drive.google.com/uc?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V&export=download')
-        path = os.path.join(args.input_directory, 'ZIP.ucid_1bF5sSVjxTx-P5wxn87nxWn_V_export_downloadR9Cwhunev5CvJ-ic__'
-                                                  'HawxhTtGOlSdcCrro4fxfEI8A', os.path.basename(args.input_directory))
+        download_manager = tfds.download.download_manager.DownloadManager(download_dir='../data/', 
+                                                           extract_dir=args.input_directory)
+        data_url = 'https://drive.google.com/uc?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V&export=download'
+        download_manager.download_and_extract(data_url)
+        path = os.path.join(args.input_directory, 
+                            'ZIP.ucid_1bF5sSVjxTx-P5wxn87nxWn_V_export_downloadR9Cwhunev5CvJ-ic__'
+                            'HawxhTtGOlSdcCrro4fxfEI8A', 
+                            os.path.basename(args.input_directory))
         dir_name = os.listdir(path)
         for name in dir_name:
             p = Path(os.path.join(path, name))
@@ -359,18 +375,22 @@ if __name__ == "__main__":
             plaintext_files.append(path)
     train, test = train_test_split(plaintext_files, test_size=0.05, random_state=42, shuffle=True)
 
-    train_ds = TextLine2CipherStatisticsDataset(train, cipher_types, args.train_dataset_size, args.min_train_len, args.max_train_len,
+    train_ds = TextLine2CipherStatisticsDataset(train, cipher_types, args.train_dataset_size, 
+                                                args.min_train_len, args.max_train_len,
                                                 args.keep_unknown_symbols, args.dataset_workers)
-    test_ds = TextLine2CipherStatisticsDataset(test, cipher_types, args.train_dataset_size, args.min_test_len, args.max_test_len,
+    test_ds = TextLine2CipherStatisticsDataset(test, cipher_types, args.train_dataset_size,     
+                                               args.min_test_len, args.max_test_len,
                                                args.keep_unknown_symbols, args.dataset_workers)
     if args.train_dataset_size % train_ds.key_lengths_count != 0:
         print("WARNING: the --train_dataset_size parameter must be dividable by the amount of --ciphers  and the length configured "
-              "KEY_LENGTHS in config.py. The current key_lengths_count is %d" % train_ds.key_lengths_count, file=sys.stderr)
+              "KEY_LENGTHS in config.py. The current key_lengths_count is %d" % 
+                  train_ds.key_lengths_count, file=sys.stderr)
     print("Datasets loaded.\n")
 
     print('Creating model...')
 
-    gpu_count = len(tf.config.list_physical_devices('GPU')) + len(tf.config.list_physical_devices('XLA_GPU'))
+    gpu_count = (len(tf.config.list_physical_devices('GPU')) +
+        len(tf.config.list_physical_devices('XLA_GPU')))
     if gpu_count > 1:
         strategy = tf.distribute.MirroredStrategy()
         with strategy.scope():
@@ -384,7 +404,7 @@ if __name__ == "__main__":
             extend_model = tf.keras.models.load_model(extend_model, compile=False)
         model = create_model()
         if architecture in ("FFNN", "CNN", "LSTM", "Transformer") and extend_model is None:
-        model.summary()
+            model.summary()
 
     print('Model created.\n')
 
@@ -436,7 +456,8 @@ if __name__ == "__main__":
             cntr += 1
             train_iter = args.train_dataset_size * cntr
             if cntr == 1:
-                batch, val_data, labels, val_labels = train_test_split(batch.numpy(), labels.numpy(), test_size=0.1)
+                batch, val_data, labels, val_labels = train_test_split(batch.numpy(), labels.numpy(), 
+                                                                       test_size=0.1)
                 batch = tf.convert_to_tensor(batch)
                 val_data = tf.convert_to_tensor(val_data)
                 labels = tf.convert_to_tensor(labels)
@@ -452,7 +473,8 @@ if __name__ == "__main__":
                     plt.gcf().set_size_inches(25, 25 / math.sqrt(2))
                     print("Plotting tree.")
                     plot_tree(model, max_depth=3, fontsize=6, filled=True)
-                    plt.savefig(args.model_name.split('.')[0] + '_decision_tree.svg', dpi=200, bbox_inches='tight', pad_inches=0.1)
+                    plt.savefig(args.model_name.split('.')[0] + '_decision_tree.svg', 
+                                dpi=200, bbox_inches='tight', pad_inches=0.1)
 
             # Naive Bayes training
             elif architecture == "NB":
@@ -460,14 +482,18 @@ if __name__ == "__main__":
 
             # FFNN, NB
             elif architecture == "[FFNN,NB]":
-                history = model[0].fit(batch, labels, batch_size=args.batch_size, validation_data=(val_data, val_labels), epochs=args.epochs,
-                                    callbacks=[early_stopping_callback, tensorboard_callback, custom_step_decay_lrate_callback])
+                history = model[0].fit(batch, labels, batch_size=args.batch_size, 
+                                       validation_data=(val_data, val_labels), epochs=args.epochs,
+                                       callbacks=[early_stopping_callback, tensorboard_callback,    
+                                                  custom_step_decay_lrate_callback])
                 # time_based_decay_lrate_callback.iteration = train_iter
                 history = model[1].partial_fit(batch, labels, classes=classes)
 
             else:
-                history = model.fit(batch, labels, batch_size=args.batch_size, validation_data=(val_data, val_labels), epochs=args.epochs,
-                                    callbacks=[early_stopping_callback, tensorboard_callback, custom_step_decay_lrate_callback])
+                history = model.fit(batch, labels, batch_size=args.batch_size, 
+                                    validation_data=(val_data, val_labels), epochs=args.epochs,
+                                    callbacks=[early_stopping_callback, tensorboard_callback, 
+                                               custom_step_decay_lrate_callback])
                 # time_based_decay_lrate_callback.iteration = train_iter
 
             # print for Decision Tree, Naive Bayes and Random Forests
@@ -495,7 +521,8 @@ if __name__ == "__main__":
 
     elapsed_training_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
     print('Finished training in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
-        elapsed_training_time.days, elapsed_training_time.seconds // 3600, (elapsed_training_time.seconds // 60) % 60,
+        elapsed_training_time.days, elapsed_training_time.seconds // 3600, 
+        (elapsed_training_time.seconds // 60) % 60,
         elapsed_training_time.seconds % 60, train_iter, train_epoch))
 
     print('Saving model...')
@@ -606,10 +633,12 @@ if __name__ == "__main__":
         t = str(correct_all / total_len_prediction)
     print('Total: %s\n' % t)
     print('Finished training in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
-        elapsed_training_time.days, elapsed_training_time.seconds // 3600, (elapsed_training_time.seconds // 60) % 60,
+        elapsed_training_time.days, elapsed_training_time.seconds // 3600, 
+        (elapsed_training_time.seconds // 60) % 60,
         elapsed_training_time.seconds % 60, train_iter, train_epoch))
     print('Prediction time: %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.' % (
-        elapsed_prediction_time.days, elapsed_prediction_time.seconds // 3600, (elapsed_prediction_time.seconds // 60) % 60,
+        elapsed_prediction_time.days, elapsed_prediction_time.seconds // 3600, 
+        (elapsed_prediction_time.seconds // 60) % 60,
         elapsed_prediction_time.seconds % 60, test_iter, test_epoch))
 
     print("Incorrect prediction counts: %s" % incorrect)
