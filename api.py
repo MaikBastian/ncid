@@ -17,6 +17,7 @@ import cipherTypeDetection.eval as cipherEval
 import cipherTypeDetection.config as config
 from cipherTypeDetection.transformer import MultiHeadSelfAttention, TransformerBlock, TokenAndPositionEmbedding
 from cipherTypeDetection.ensembleModel import EnsembleModel
+from cipherTypeDetection.rotorCipherEnsemble import RotorCipherEnsemble
 
 
 # init fast api
@@ -38,22 +39,88 @@ app.add_middleware(
 async def startup_event():
     """The models are loaded with hardcoded names. Change in future if multiple models are available."""
     model_path = "data/models"
-    models["Transformer"] = (tf.keras.models.load_model(os.path.join(model_path, "t96_transformer_final_100.h5"), custom_objects={
-        'TokenAndPositionEmbedding': TokenAndPositionEmbedding, 'MultiHeadSelfAttention': MultiHeadSelfAttention,
-        'TransformerBlock': TransformerBlock}), False, True)
-    models["FFNN"] = (tf.keras.models.load_model(os.path.join(model_path, "t128_ffnn_final_100.h5")), True, False)
-    models["LSTM"] = (tf.keras.models.load_model(os.path.join(model_path, "t129_lstm_final_100.h5")), False, True)
-    optimizer = Adam(learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, epsilon=config.epsilon,
-                     amsgrad=config.amsgrad)
+    models["Transformer"] = (
+        tf.keras.models.load_model(
+            os.path.join(model_path, "t96_transformer_final_100.h5"),
+            custom_objects={
+                'TokenAndPositionEmbedding': TokenAndPositionEmbedding,
+                'MultiHeadSelfAttention': MultiHeadSelfAttention,
+                'TransformerBlock': TransformerBlock}),
+        False,
+        True)
+    models["FFNN"] = (
+        tf.keras.models.load_model(
+            os.path.join(model_path, "t128_ffnn_final_100.h5")),
+        True,
+        False)
+    models["LSTM"] = (
+        tf.keras.models.load_model(
+            os.path.join(model_path, "t129_lstm_final_100.h5")),
+        False,
+        True)
+    optimizer = Adam(
+        learning_rate=config.learning_rate,
+        beta_1=config.beta_1,
+        beta_2=config.beta_2,
+        epsilon=config.epsilon,
+        amsgrad=config.amsgrad)
     for _, item in models.items():
-        item[0].compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=[
-            "accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
+        item[0].compile(
+            optimizer=optimizer,
+            loss="sparse_categorical_crossentropy",
+            metrics=[
+                "accuracy",
+                SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
     # TODO add this in production when having at least 32 GB RAM
     with open(os.path.join(model_path, "t99_rf_final_100.h5"), "rb") as f:
         models["RF"] = (pickle.load(f), True, False)
     with open(os.path.join(model_path, "t128_nb_final_100.h5"), "rb") as f:
         models["NB"] = (pickle.load(f), True, False)
+    with open(os.path.join(model_path, "svm-hist"), "rb") as f:
+        models["SVM-Rotor"] = (pickle.load(f), True, False)
+    with open(os.path.join(model_path, "knn-hist"), "rb") as f:
+        models["kNN-Rotor"] = (pickle.load(f), True, False)
+    # with open(os.path.join(model_path, "rf-hist"), "rb") as f:
+    #     models["RF-Rotor"] = (pickle.load(f), True, False)
 
+class ArchitectureError(Exception):
+    def __init__(self, response):
+        Exception.__init__(self)
+        self.response = response
+        
+def validate_architectures(architectures):
+    max_architectures = len(models.keys())
+    # Warn if the provided number of architectures is out of the expected bounds
+    if not 0 < len(architectures) <= max_architectures:
+        response = JSONResponse(
+            {
+                "success": False,
+                "payload": None,
+                "error_msg": "The number of architectures must be between 1 and %d." %
+                max_architectures},
+            status_code=status.HTTP_400_BAD_REQUEST)
+        raise ArchitectureError(response)
+            
+    # Warn about duplicate architectures
+    if len(set(architectures)) != len(architectures):
+        response = JSONResponse({"success": False,
+                             "payload": None,
+                             "error_msg": "Multiple architectures of the same type are not "
+                             "allowed!"},
+                            status_code=status.HTTP_400_BAD_REQUEST)
+        raise ArchitectureError(response)
+    
+    # Check if the provided architectures are known
+    for architecture in architectures:
+        if architecture not in models.keys():
+            response = JSONResponse(
+                {
+                    "success": False,
+                    "payload": None,
+                    "error_msg": "The architecture '%s' does not exist!" %
+                    architecture},
+                status_code=status.HTTP_400_BAD_REQUEST)
+            raise ArchitectureError(response)
 
 class APIResponse(BaseModel):
     """Define api response model."""
@@ -65,8 +132,10 @@ class APIResponse(BaseModel):
 @app.exception_handler(Exception)
 async def exception_handler(request, exc):
     """Define exception response format."""
-    return JSONResponse({"success": False, "payload": None, "error_msg": str(exc)}, status_code=status.HTTP_400_BAD_REQUEST)
-# TODO: does not work (exceptions are still thrown), specific exceptions work -- todo: FIX ;D
+    return JSONResponse({"success": False, "payload": None, "error_msg": str(
+        exc)}, status_code=status.HTTP_400_BAD_REQUEST)
+# TODO: does not work (exceptions are still thrown), specific exceptions
+# work -- todo: FIX ;D
 
 # todo: custom error handling for unified error responses and no closing on error
 # https://fastapi.tiangolo.com/tutorial/handling-errors/#override-the-default-exception-handlers
@@ -75,125 +144,89 @@ async def exception_handler(request, exc):
 @app.get("/get_available_architectures", response_model=APIResponse)
 async def get_available_architectures():
     return {"success": True, "payload": list(models.keys())}
-
-
-@app.get("/evaluate/single_line/ciphertext", response_model=APIResponse)
-async def evaluate_single_line_ciphertext(ciphertext: str, architecture: List[str] = Query([])):
-    max_architectures = len(models.keys())
-    if not 0 < len(architecture) <= max_architectures:
-        return JSONResponse({"success": False, "payload": None, "error_msg": "The number of architectures must be between 1 and %d." % max_architectures},
-                            status_code=status.HTTP_400_BAD_REQUEST)
-    cipher_types = get_cipher_types_to_use(["aca"])  # aca stands for all implemented ciphers
-    if len(architecture) == 1:
-        if architecture[0] not in models.keys():
-            return JSONResponse({"success": False, "payload": None, "error_msg": "The architecture '%s' does not exist!" % architecture[0]},
-                                status_code=status.HTTP_400_BAD_REQUEST)
-        model, feature_engineering, pad_input = models[architecture[0]]
-        cipherEval.architecture = architecture[0]
+    
+def predict_aca_ciphers(ciphertext, architectures):
+    # only use architectures that can predict aca ciphers
+    architectures = [architecture 
+        for architecture in architectures 
+        if architecture in ("Transformer", "FFNN", "LSTM", "RF", "NB")]
+    
+    aca_cipher_types = get_aca_cipher_types_to_use()
+    
+    if len(architectures) == 0:
+        return {}
+    elif len(architectures) == 1:
+        model, feature_engineering, pad_input = models[architectures[0]]
+        cipherEval.architecture = architectures[0]
         config.FEATURE_ENGINEERING = feature_engineering
         config.PAD_INPUT = pad_input
     else:
-        if len(set(architecture)) != len(architecture):
-            return JSONResponse({"success": False, "payload": None, "error_msg": "Multiple architectures of the same type are not "
-                                                                                 "allowed!"}, status_code=status.HTTP_400_BAD_REQUEST)
-        cipher_indices = []
-        for cipher_type in cipher_types:
-            cipher_indices.append(config.CIPHER_TYPES.index(cipher_type))
+        cipher_indices = [config.CIPHER_TYPES.index(cipher_type) 
+            for cipher_type in aca_cipher_types]
         model_list = []
         architecture_list = []
-        for val in architecture:
-            if val not in models.keys():
-                return JSONResponse({"success": False, "payload": None, "error_msg": "The architecture '%s' does not exist!" % val},
-                                    status_code=status.HTTP_400_BAD_REQUEST)
-            model_list.append(models[val][0])
-            architecture_list.append(val)
+        for architecture in architectures:
+            model_list.append(models[architecture][0])
+            architecture_list.append(architecture)
         cipherEval.architecture = "Ensemble"
-        model = EnsembleModel(model_list, architecture_list, "weighted", cipher_indices)
+        model = EnsembleModel(
+            model_list,
+            architecture_list,
+            "weighted",
+            cipher_indices)
+    
+    return cipherEval.predict_single_line(SimpleNamespace(
+        ciphertext=ciphertext,
+        # todo: needs fileupload first (either set ciphertext OR file, never both)
+        file=None,
+        ciphers=aca_cipher_types,
+        batch_size=128,
+        verbose=False
+    ), model)
+    
+def predict_rotor_ciphers(ciphertext, architectures):
+    # only use architectures that can predict rotor machine ciphers
+    architectures = [architecture 
+        for architecture in architectures 
+        if architecture in ("SVM-Rotor", "RF-Rotor", "kNN-Rotor")]
+    if len(architectures) == 0:
+        return {}
+    rotor_models = [models[architecture][0] for architecture in architectures]
+    return RotorCipherEnsemble(rotor_models).predict_single_line(ciphertext)
 
+@app.get("/evaluate/single_line/ciphertext", response_model=APIResponse)
+async def evaluate_single_line_ciphertext(ciphertext: str, architecture: List[str] = Query([])):
+    # use plural inside function
+    architectures = architecture
     try:
-        # call prediction method
-        result = cipherEval.predict_single_line(SimpleNamespace(
-            ciphertext = ciphertext,
-            file = None, # todo: needs fileupload first (either set ciphertext OR file, never both)
-            ciphers = cipher_types,
-            batch_size = 128,
-            verbose = False
-        ), model)
+        validate_architectures(architectures)
+    except ArchitectureError as error:
+        return error.response
+    
+    try:
+        aca_prediction = predict_aca_ciphers(ciphertext, architectures)
+        rotor_ciphers_prediction = predict_rotor_ciphers(ciphertext, architectures)
+        
+        # TODO: Improve!
+        combined_prediction = aca_prediction
+        for key, probability in rotor_ciphers_prediction.items():
+            combined_prediction[key] = probability
+            
+        return {"success": True, "payload": combined_prediction}
     except BaseException as e:
-        # only use these lines for debugging. Never in production environment due to security reasons!
+        # only use these lines for debugging. Never in production environment due
+        # to security reasons!
         import traceback
         traceback.print_exc()
-        return JSONResponse({"success": False, "payload": None, "error_msg": repr(e)}, status_code=500)
+        return JSONResponse({"success": False, "payload": None,
+                            "error_msg": repr(e)}, status_code=500)
         # return JSONResponse(None, status_code=500)
-    return {"success": True, "payload": result}
 
 
 ###########################################################
 
-def get_cipher_types_to_use(cipher_types):
-    if config.MTC3 in cipher_types:
-        del cipher_types[cipher_types.index(config.MTC3)]
-        cipher_types.append(config.CIPHER_TYPES[0])
-        cipher_types.append(config.CIPHER_TYPES[1])
-        cipher_types.append(config.CIPHER_TYPES[2])
-        cipher_types.append(config.CIPHER_TYPES[3])
-        cipher_types.append(config.CIPHER_TYPES[4])
-    if config.ACA in cipher_types:
-        del cipher_types[cipher_types.index(config.ACA)]
-        cipher_types.append(config.CIPHER_TYPES[0])
-        cipher_types.append(config.CIPHER_TYPES[1])
-        cipher_types.append(config.CIPHER_TYPES[2])
-        cipher_types.append(config.CIPHER_TYPES[3])
-        cipher_types.append(config.CIPHER_TYPES[4])
-        cipher_types.append(config.CIPHER_TYPES[5])
-        cipher_types.append(config.CIPHER_TYPES[6])
-        cipher_types.append(config.CIPHER_TYPES[7])
-        cipher_types.append(config.CIPHER_TYPES[8])
-        cipher_types.append(config.CIPHER_TYPES[9])
-        cipher_types.append(config.CIPHER_TYPES[10])
-        cipher_types.append(config.CIPHER_TYPES[11])
-        cipher_types.append(config.CIPHER_TYPES[12])
-        cipher_types.append(config.CIPHER_TYPES[13])
-        cipher_types.append(config.CIPHER_TYPES[14])
-        cipher_types.append(config.CIPHER_TYPES[15])
-        cipher_types.append(config.CIPHER_TYPES[16])
-        cipher_types.append(config.CIPHER_TYPES[17])
-        cipher_types.append(config.CIPHER_TYPES[18])
-        cipher_types.append(config.CIPHER_TYPES[19])
-        cipher_types.append(config.CIPHER_TYPES[20])
-        cipher_types.append(config.CIPHER_TYPES[21])
-        cipher_types.append(config.CIPHER_TYPES[22])
-        cipher_types.append(config.CIPHER_TYPES[23])
-        cipher_types.append(config.CIPHER_TYPES[24])
-        cipher_types.append(config.CIPHER_TYPES[25])
-        cipher_types.append(config.CIPHER_TYPES[26])
-        cipher_types.append(config.CIPHER_TYPES[27])
-        cipher_types.append(config.CIPHER_TYPES[28])
-        cipher_types.append(config.CIPHER_TYPES[29])
-        cipher_types.append(config.CIPHER_TYPES[30])
-        cipher_types.append(config.CIPHER_TYPES[31])
-        cipher_types.append(config.CIPHER_TYPES[32])
-        cipher_types.append(config.CIPHER_TYPES[33])
-        cipher_types.append(config.CIPHER_TYPES[34])
-        cipher_types.append(config.CIPHER_TYPES[35])
-        cipher_types.append(config.CIPHER_TYPES[36])
-        cipher_types.append(config.CIPHER_TYPES[37])
-        cipher_types.append(config.CIPHER_TYPES[38])
-        cipher_types.append(config.CIPHER_TYPES[39])
-        cipher_types.append(config.CIPHER_TYPES[40])
-        cipher_types.append(config.CIPHER_TYPES[41])
-        cipher_types.append(config.CIPHER_TYPES[42])
-        cipher_types.append(config.CIPHER_TYPES[43])
-        cipher_types.append(config.CIPHER_TYPES[44])
-        cipher_types.append(config.CIPHER_TYPES[45])
-        cipher_types.append(config.CIPHER_TYPES[46])
-        cipher_types.append(config.CIPHER_TYPES[47])
-        cipher_types.append(config.CIPHER_TYPES[48])
-        cipher_types.append(config.CIPHER_TYPES[49])
-        cipher_types.append(config.CIPHER_TYPES[50])
-        cipher_types.append(config.CIPHER_TYPES[51])
-        cipher_types.append(config.CIPHER_TYPES[52])
-        cipher_types.append(config.CIPHER_TYPES[53])
-        cipher_types.append(config.CIPHER_TYPES[54])
-        cipher_types.append(config.CIPHER_TYPES[55])
+def get_aca_cipher_types_to_use():
+    cipher_types = []
+    for cipher_index in range(56):
+        cipher_types.append(config.CIPHER_TYPES[cipher_index])
     return cipher_types
