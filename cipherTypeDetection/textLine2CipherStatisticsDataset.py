@@ -1293,6 +1293,9 @@ def calculate_statistics(datum):
     # cdd = calculate_cdd(numbers)
     # sstd = calculate_sstd(numbers)
     ldi_stats = calculate_ldi_stats(numbers)
+    histogram = calculate_histogram(datum)
+    digrams = calculate_digrams(datum)
+    cipher_sequence = calculate_cipher_sequence(datum)
 
     # baseline model
     # return [unigram_ioc] + [digraphic_ioc] + [has_j] + [entropy] + [chi_square] + [has_h] + [has_sp] + [has_x] + frequencies
@@ -1322,7 +1325,8 @@ def pad_sequences(sequences, maxlen):
 
 
 class TextLine2CipherStatisticsDataset:
-    def __init__(self, paths, cipher_types, batch_size, min_text_len, max_text_len, keep_unknown_symbols=False, dataset_workers=None,
+    def __init__(self, plaintext_paths, ciphertext_paths, cipher_types, batch_size, min_text_len, max_text_len, 
+                 keep_unknown_symbols=False, dataset_workers=None,
                  generate_test_data=False):
         self.keep_unknown_symbols = keep_unknown_symbols
         self.dataset_workers = dataset_workers
@@ -1333,12 +1337,14 @@ class TextLine2CipherStatisticsDataset:
         self.epoch = 0
         self.iteration = 0
         self.iter = None
-        datasets = []
-        for path in paths:
-            datasets.append(tf.data.TextLineDataset(path, num_parallel_reads=dataset_workers))
-        self.dataset = datasets[0]
-        for dataset in datasets[1:]:
-            self.dataset = self.dataset.zip(dataset)
+        plaintext_datasets = []
+        ciphertext_datasets = []
+        for plaintext_path in plaintext_paths:
+            plaintext_datasets.append(tf.data.TextLineDataset(plaintext_path,   
+                                                              num_parallel_reads=dataset_workers))
+        self.plaintext_dataset = plaintext_datasets[0]
+        for plaintext_dataset in plaintext_datasets[1:]:
+            self.plaintext_dataset = self.plaintext_dataset.zip(plaintext_dataset)
         count = 0
         for cipher_t in self.cipher_types:
             index = self.cipher_types.index(cipher_t)
@@ -1349,13 +1355,14 @@ class TextLine2CipherStatisticsDataset:
         self.key_lengths_count = count
         self.generate_test_data = generate_test_data
 
-    def shuffle(self, buffer_size, seed=None, reshuffle_each_iteration=None):
-        new_dataset = copy.copy(self)
-        new_dataset.dataset = new_dataset.dataset.shuffle(buffer_size, seed, reshuffle_each_iteration)
-        return new_dataset
+    # TODO: Can probably be removed!?
+    # def shuffle(self, buffer_size, seed=None, reshuffle_each_iteration=None):
+    #     new_dataset = copy.copy(self)
+    #     new_dataset.dataset = new_dataset.dataset.shuffle(buffer_size, seed, reshuffle_each_iteration)
+    #     return new_dataset
 
     def __iter__(self):
-        self.iter = self.dataset.__iter__()
+        self.iter = self.plaintext_dataset.__iter__()
         return self
 
     def __next__(self):

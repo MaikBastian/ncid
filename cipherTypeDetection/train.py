@@ -13,6 +13,7 @@ import functools
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.naive_bayes import MultinomialNB
+from sklearn.svm import SVC
 import matplotlib.pyplot as plt
 from datetime import datetime
 # This environ variable must be set before all tensorflow imports!
@@ -176,6 +177,34 @@ def create_model():
                            metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
         model_nb = MultinomialNB(alpha=config.alpha, fit_prior=config.fit_prior)
         return [model_ffnn, model_nb]
+    
+    if architecture == "SVM-Rotor":
+        model_ = SVC(probability=True, C=1, gamma=0.0001, kernel="rbf")
+
+    if architecture == "RF-Rotor":
+        print("UNIMPLEMENTED ARCHITECTURE!")
+        sys.exit(1)
+
+    if architecture == "kNN-Rotor":
+        print("UNIMPLEMENTED ARCHITECTURE!")
+        sys.exit(1)
+
+    if architecture == "LSTM-Rotor":
+        print("UNIMPLEMENTED ARCHITECTURE!")
+        sys.exit(1)
+
+    if architecture == "MLP-Rotor":
+        print("UNIMPLEMENTED ARCHITECTURE!")
+        sys.exit(1)
+
+    if architecture == "CNN-Rotor":
+        print("UNIMPLEMENTED ARCHITECTURE!")
+        sys.exit(1)
+
+    if architecture == "ELM-Rotor":
+        print("UNIMPLEMENTED ARCHITECTURE!")
+        sys.exit(1)
+
     return model_
 
 def parse_arguments():
@@ -288,9 +317,12 @@ def download_datasets(args):
     os.rmdir(os.path.dirname(path))
     print("Datasets Downloaded.")
 
-def load_datasets_from_disk():
-    """Loads existing plaintexts from input_directory and transforms them into datasets for
-    training and testing.
+def load_datasets_from_disk(args, cipher_types):
+    """Loads datasets from the file system. 
+    In case of the ACA ciphers the datasets are plaintext files that need to be
+    encrypted before the features can be extracted.
+    In case of the rotor ciphers there are already encrypted ciphertext files 
+    that can directly be used to extract the features.
     """
     print("Loading Datasets...")
     plaintext_files = []
@@ -299,7 +331,20 @@ def load_datasets_from_disk():
         path = os.path.join(args.input_directory, name)
         if os.path.isfile(path):
             plaintext_files.append(path)
-    train, test = train_test_split(plaintext_files, test_size=0.05, random_state=42, shuffle=True)
+    
+    # TODO: Do not hard code folder!?
+    rotor_cipher_dir = "rotor_ciphers"
+    rotor_ciphertext_files = []
+    dir_name = os.listdir(rotor_cipher_dir)
+    for name in dir_name:
+        path = os.path.join(rotor_cipher_dir, name)
+        if os.path.isfile(path):
+            rotor_ciphertext_files.append(path)
+
+    train_plaintexts, test_plaintexts = train_test_split(plaintext_files, test_size=0.05, 
+                                                         random_state=42, shuffle=True)
+    train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertext_files, test_size=0.05, 
+                                                                       random_state=42, shuffle=True)
 
     train_ds = TextLine2CipherStatisticsDataset(train, cipher_types, args.train_dataset_size, 
                                                 args.min_train_len, args.max_train_len,
@@ -339,7 +384,7 @@ def create_model_for_hardware_config(extend_model):
     print('Model created.\n')
     return model
     
-def train_model(model):
+def train_model(model, args, train_ds):
     """Trains the model"""
     print('Training model...')
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir='../data/logs', update_freq='epoch')
@@ -631,8 +676,12 @@ if __name__ == "__main__":
         download_datasets(args)
 
     train_ds, test_ds = load_datasets_from_disk()
+    
+    # print("DONE!")
+    # sys.exit(0)
+
     model = create_model_for_hardware_config(extend_model)
-    early_stopping_callback, train_iter, training_stats = train_model(model)
+    early_stopping_callback, train_iter, training_stats = train_model(model, args, train_ds)
     save_model(model)
     prediction_stats, incorrect = predict_test_data(model, args, early_stopping_callback, train_iter)
     
