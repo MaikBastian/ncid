@@ -50,9 +50,13 @@ def encrypt_file_with_all_cipher_types(filename, save_folder, cipher_types_, app
             converted_lines = convert_lines_to_length(filtered_plaintexts, min_text_len, max_text_len)
 
             for line in converted_lines:
-                ciphertext, key = encrypt(line, index, key_length, keep_unknown_symbols, True)
-                ciphertexts.append(map_numbers_into_textspace(ciphertext, OUTPUT_ALPHABET, UNKNOWN_SYMBOL))
-                keys.append(key)
+                try:
+                    ciphertext, key = encrypt(line, index, key_length, keep_unknown_symbols, True)
+                    ciphertexts.append(map_numbers_into_textspace(ciphertext, OUTPUT_ALPHABET, UNKNOWN_SYMBOL))
+                    keys.append(key)
+                except Exception as e:
+                    print(f"Skipping encryption for cipher: {cipher_type} in file: {Path(filename).name}")
+                    continue
 
                 # check if decryption works
                 # c = cipher.encrypt(plaintext_numberspace, key)
