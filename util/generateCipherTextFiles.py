@@ -13,6 +13,27 @@ from util.utils import read_txt_list_from_file, write_ciphertexts_with_keys_to_f
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
+def convert_lines_to_length(lines, min_length, max_length=None):
+    """Takes a list of binary strings and converts each to at least min_length
+    length and (if given) to at most max_length.
+    The last line will not necessarily have min_length characters. 
+    """
+    sample = b""
+    result = []
+    if max_length:
+        # Append all lines to sample and split the resulting string indices max_length apart
+        for line in lines:
+            sample = (bytes.decode(sample) + bytes.decode(line)).encode()
+        for splitIndex in range(0, len(sample), max_length):
+            result.append(sample[splitIndex:splitIndex + max_length])
+    else:
+        # Sample multiple lines until min_length is reached and append the sample to result
+        for line in lines:
+            if len(sample) < min_length:
+                sample = (bytes.decode(sample) + bytes.decode(line)).encode()
+            else:
+                result.append(sample)
+    return result
 
 def encrypt_file_with_all_cipher_types(filename, save_folder, cipher_types_, append_key, keep_unknown_symbols, min_text_len, max_text_len):
     plaintexts = read_txt_list_from_file(filename)
@@ -24,10 +45,12 @@ def encrypt_file_with_all_cipher_types(filename, save_folder, cipher_types_, app
             key_length = config.KEY_LENGTHS[index][0]
             ciphertexts = []
             keys = []
-            for p in plaintexts:
-                if len(cipher.filter(p, keep_unknown_symbols)) < min_text_len:
-                    continue
-                ciphertext, key = encrypt(p, index, key_length, keep_unknown_symbols, True)
+            
+            filtered_plaintexts = [cipher.filter(line, keep_unknown_symbols) for line in plaintexts]
+            converted_lines = convert_lines_to_length(filtered_plaintexts, min_text_len, max_text_len)
+
+            for line in converted_lines:
+                ciphertext, key = encrypt(line, index, key_length, keep_unknown_symbols, True)
                 ciphertexts.append(map_numbers_into_textspace(ciphertext, OUTPUT_ALPHABET, UNKNOWN_SYMBOL))
                 keys.append(key)
 
