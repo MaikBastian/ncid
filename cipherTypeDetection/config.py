@@ -56,6 +56,7 @@ from cipherImplementations.variant import Variant
 from cipherImplementations.vigenere import Vigenere
 
 
+ROTOR_CIPHER_TYPES = ['enigma', 'm209', 'purple', 'sigaba', 'typex']
 # CIPHER_TYPES = ['columnar_transposition', 'hill', 'playfair', 'simple_substitution', 'vigenere']
 CIPHER_TYPES = ['amsco', 'autokey', 'baconian', 'bazeries', 'beaufort', 'bifid', 'cadenus', 'checkerboard', 'columnar_transposition',
                 'condi', 'cmbifid', 'digrafid', 'foursquare', 'fractionated_morse', 'grandpre', 'grille', 'gromark', 'gronsfeld',
@@ -64,7 +65,8 @@ CIPHER_TYPES = ['amsco', 'autokey', 'baconian', 'bazeries', 'beaufort', 'bifid',
                 'numbered_key', 'periodic_gromark', 'phillips', 'phillips_rc', 'plaintext', 'playfair', 'pollux', 'porta', 'portax',
                 'progressive_key', 'quagmire1', 'quagmire2', 'quagmire3', 'quagmire4', 'ragbaby', 'railfence', 'redefence',
                 'route_transposition', 'running_key', 'seriated_playfair', 'slidefair', 'swagman', 'tridigital', 'trifid', 'tri_square',
-                'two_square', 'variant', 'vigenere']
+                'two_square', 'variant', 'vigenere', 'enigma', 'm209', 'purple', 'sigaba', 'typex']
+
 # CIPHER_IMPLEMENTATIONS = [ColumnarTransposition(INPUT_ALPHABET, UNKNOWN_SYMBOL, UNKNOWN_SYMBOL_NUMBER, fill_blocks=False),
 #                           Hill(INPUT_ALPHABET, b'x', ord('x')),
 #                           Playfair(INPUT_ALPHABET.replace(b'j', b''), b'x', ord('x')),
@@ -138,7 +140,7 @@ KEY_LENGTHS = [[5,6,7,8], [5,6,7,8], [None]*4, [None]*4, [5,6,7,8], [5,6,7,8], [
                [None]*4, [5,6,7,8], [5,6,7,8], [5,6,7,8], [10,10,10,10], [None]*4, [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [None]*4,
                [5,6,7,8], [None]*4, [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8],
                [5,6,7,8], [4,4,5,10], [None]*4, [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8], [5,6,7,8],
-               [5,6,7,8]]
+               [5,6,7,8], [None]*4, [None]*4, [None]*4, [None]*4, [None]*4]
 MTC3 = 'mtc3'
 ACA = 'aca'
 FEATURE_ENGINEERING = True
