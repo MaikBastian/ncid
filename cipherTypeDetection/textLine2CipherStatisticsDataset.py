@@ -1593,6 +1593,7 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
             worker, 
             dataset=self._ciphertext_dataset)
         if ciphertext_inputs_exhausted:
+            print(f"Ciphertexts of epoch{self._epoch} exhausted!")
             # process plaintext datasets once rotor cipher datasets are exhausted
             worker = PlaintextLine2CipherStatisticsWorker(self._plaintext_dataset_params.cipher_types, 
                                                           self._plaintext_dataset_params.max_text_len, 
@@ -1602,6 +1603,7 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
                 worker, dataset=self._plaintext_dataset)
             result.extend(plaintext_result)
         if plaintext_inputs_exhausted:
+            print(f"Ciphertexts and plaintexts of epoch{self._epoch} exhausted! Resetting iterators!")
             # All inputs exhausted: Increase epoch, re-initialize datasets and therefore begin 
             # iteration from the start.
             self._epoch += 1
