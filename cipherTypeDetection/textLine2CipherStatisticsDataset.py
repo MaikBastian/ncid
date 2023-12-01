@@ -1,3 +1,4 @@
+from pathlib import Path
 import tensorflow as tf
 import cipherTypeDetection.config as config
 from cipherImplementations.cipher import OUTPUT_ALPHABET
@@ -7,8 +8,10 @@ from util.utils import map_text_into_numberspace
 import copy
 import math
 import multiprocessing
+from multiprocessing import pool as multiprocessing_pool
+import logging
 import numpy as np
-from collections import Counter
+from collections import Counter, deque
 from py_mini_racer import py_mini_racer
 sys.path.append("../")
 
@@ -1428,116 +1431,426 @@ def pad_sequences(sequences, maxlen):
     return np.array(ret_sequences)
 
 
-class TextLine2CipherStatisticsDataset:
-    def __init__(self, plaintext_paths, ciphertext_paths, cipher_types, batch_size, min_text_len, max_text_len, 
+class CipherStatisticsDataset:
+    """Base class for cipher statistics datasets. These datasets take some inputs and calculate
+    the statistics for these inputs and return them in batches via their iterator interface."""
+
+    def __init__(self, iteration, epoch, dataset_workers, batch_size, key_lengths_count):
+        self._iteration = iteration
+        self._dataset_workers = dataset_workers
+        self._epoch = epoch
+        self._batch_size = batch_size
+        self._key_lengths_count = key_lengths_count
+
+    @property
+    def iteration(self):
+        """The iteration corresponds to the number of lines processed by the dataset."""
+        return self._iteration
+    
+    @property
+    def epoch(self):
+        """If the epoch is increased, the dataset will restart iterating it's inputs from
+        the beginning."""
+        return self._epoch
+    
+    # @epoch.setter
+    # def epoch(self, value):
+    #     self._epoch = value
+    
+    @property
+    def dataset_workers(self):
+        """The number of workers to use when calculating the statistics of the input. This number
+        also equals the number of `TrainingBatch`es returned by `__next__`."""
+        return self._dataset_workers
+    
+    @property
+    def batch_size(self):
+        """The amount of input lines each worker process will process. This property influences
+        the length of the returned `TrainingBatch`es of iterator method `__next__`."""
+        return self._batch_size
+    
+    @property
+    def key_lengths_count(self):
+        return self._key_lengths_count
+    
+class PlaintextDatasetParameters:
+
+    def __init__(self, plaintext_paths, cipher_types, batch_size, min_text_len, max_text_len, 
                  keep_unknown_symbols=False, dataset_workers=None,
                  generate_test_data=False):
-        self.keep_unknown_symbols = keep_unknown_symbols
-        self.dataset_workers = dataset_workers
+        self.plaintext_paths = plaintext_paths
         self.cipher_types = cipher_types
         self.batch_size = batch_size
         self.min_text_len = min_text_len
         self.max_text_len = max_text_len
-        self.epoch = 0
-        self.iteration = 0
-        self.iter = None
-        plaintext_datasets = []
-        ciphertext_datasets = []
-        for plaintext_path in plaintext_paths:
-            plaintext_datasets.append(tf.data.TextLineDataset(plaintext_path,   
-                                                              num_parallel_reads=dataset_workers))
-        self.plaintext_dataset = plaintext_datasets[0]
-        for plaintext_dataset in plaintext_datasets[1:]:
-            self.plaintext_dataset = self.plaintext_dataset.zip(plaintext_dataset)
-        count = 0
-        for cipher_t in self.cipher_types:
-            index = self.cipher_types.index(cipher_t)
-            if isinstance(config.KEY_LENGTHS[index], list):
-                count += len(config.KEY_LENGTHS[index])
-            else:
-                count += 1
-        self.key_lengths_count = count
+        self.keep_unknown_symbols = keep_unknown_symbols
+        self.dataset_workers = dataset_workers
         self.generate_test_data = generate_test_data
 
-    # TODO: Can probably be removed!?
-    # def shuffle(self, buffer_size, seed=None, reshuffle_each_iteration=None):
-    #     new_dataset = copy.copy(self)
-    #     new_dataset.dataset = new_dataset.dataset.shuffle(buffer_size, seed, reshuffle_each_iteration)
-    #     return new_dataset
+class CiphertextDatasetParameters:
+
+    def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers):
+        self.ciphertexts_with_labels = ciphertexts_with_labels
+        self.cipher_types = cipher_types
+        self.batch_size = batch_size
+        self.dataset_workers = dataset_workers
+
+
+def calculate_next_iteration(iterator): # TODO: REmove!
+    return next(iterator)
+
+class ParallelIterator: # TODO: Remove!
+
+    def __init__(self, serial_iterator, number_of_workers):
+        self._serial_iterator = serial_iterator
+        self._pool = multiprocessing_pool.Pool(2) # number_of_workers
+        self._calculating = deque()
+        self._logger = multiprocessing.log_to_stderr(logging.INFO) # TODO: Use get_logger instead!?
 
     def __iter__(self):
-        self.iter = self.plaintext_dataset.__iter__()
+        return self
+    
+    def __next__(self):
+        error_callback = lambda error: print(f"ERROR in ParallelIterator: {error}")
+        if len(self._calculating) == 0:
+            self._logger.info("No calculating iterations. Starting two async iterations!")
+            immediate_iteration = self._pool.apply(calculate_next_iteration, (self._serial_iterator, ))
+            future_iteration = self._pool.apply_async(calculate_next_iteration, (self._serial_iterator,),
+                                                      error_callback=error_callback)
+            self._calculating.append(future_iteration)
+            return immediate_iteration
+        else:
+            self._logger.info("At least one calculating iteration. Starting one async iteration!")
+            future_iteration = self._pool.apply_async(calculate_next_iteration, (self._serial_iterator,),
+                                                      error_callback=error_callback)
+            self._calculating.append(future_iteration)
+            immediate_iteration = self._calculating.popleft()
+            return immediate_iteration.get()
+
+class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better name!?
+    """This class composes both kinds of statistics dataset iterators
+    (CipherTextLine2CipherStatisticsDataset and PlainTextLine2CipherStatisticsDataset).
+    It provides an iterator interface as well. This interface will return the same
+    lists of `TrainingBatch`es as the composed classes. (See their documentation
+    for more details!). The first iterations will return the results from 
+    CipherTextLine2CipherStatisticsDataset until they are depleted."""
+
+    def __init__(self, plaintext_dataset_params, rotor_ciphertext_dataset_params):
+        assert plaintext_dataset_params.batch_size == rotor_ciphertext_dataset_params.batch_size
+        assert plaintext_dataset_params.dataset_workers == rotor_ciphertext_dataset_params.dataset_workers
+
+        batch_size = plaintext_dataset_params.batch_size
+
+        # combined_key_lengths = plaintext_dataset.key_lengths_count + rotor_ciphertext_dataset.key_lengths_count
+        combined_key_lengths = 42
+        super(CombinedCipherStatisticsDataset, self).__init__(iteration=0, 
+                                                              epoch=0, 
+                                                              dataset_workers=plaintext_dataset_params.dataset_workers, 
+                                                              batch_size=batch_size, 
+                                                              key_lengths_count=combined_key_lengths)
+        
+        self._index = 0
+        self._pool = multiprocessing_pool.Pool(self._dataset_workers)
+        # double ended queue for storing asynchronously processing functions
+        self._processing_queue = deque() 
+        self._logger = multiprocessing.log_to_stderr(logging.INFO) # TODO: Use get_logger instead!?
+
+        self._plaintext_dataset_params = plaintext_dataset_params
+        self._rotor_ciphertext_dataset_params = rotor_ciphertext_dataset_params
+
+        self._initialize_datasets()
+    
+    def _initialize_datasets(self):
+        plaintext_params = self._plaintext_dataset_params
+        ciphertext_params = self._rotor_ciphertext_dataset_params
+        self._plaintext_dataset = PlaintextPathsDataset(plaintext_params.plaintext_paths, 
+                                                        plaintext_params.batch_size, 
+                                                        plaintext_params.cipher_types, 
+                                                        plaintext_params.min_text_len, 
+                                                        plaintext_params.max_text_len, 
+                                                        plaintext_params.keep_unknown_symbols)
+        self._ciphertext_dataset = RotorCiphertextDataset(ciphertext_params.ciphertexts_with_labels, 
+                                                          self._batch_size)
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        config_params = ConfigParams(config.CIPHER_TYPES, config.KEY_LENGTHS, 
+                                         config.FEATURE_ENGINEERING, config.PAD_INPUT)
+        
+        # init epoch on first iteration
+        if self._epoch == 0:
+            self._epoch = 1
+
+        result = []
+        ciphertext_inputs_exhausted = False
+        plaintext_inputs_exhausted = False
+
+        # process rotor cipher datasets
+        worker = CiphertextLine2CipherStatisticsWorker(config_params)
+        ciphertext_inputs_exhausted, result = self._perform_concurrent(
+            worker, 
+            dataset=self._ciphertext_dataset)
+        if ciphertext_inputs_exhausted:
+            # process plaintext datasets once rotor cipher datasets are exhausted
+            worker = PlaintextLine2CipherStatisticsWorker(self._plaintext_dataset_params.cipher_types, 
+                                                          self._plaintext_dataset_params.max_text_len, 
+                                                          self._plaintext_dataset_params.keep_unknown_symbols,
+                                                          config_params)
+            plaintext_inputs_exhausted, plaintext_result = self._perform_concurrent(
+                worker, dataset=self._plaintext_dataset)
+            result.extend(plaintext_result)
+        if plaintext_inputs_exhausted:
+            # All inputs exhausted: Increase epoch, re-initialize datasets and therefore begin 
+            # iteration from the start.
+            self._epoch += 1
+            self._initialize_datasets()
+        
+        return result
+
+    def _perform_concurrent(self, worker, *, dataset):
+        error_callback = lambda error: print(f"ERROR in ParallelIterator: {error}")
+
+        async_results = []
+        inputs_exhaused = False
+
+        for _ in range(self._dataset_workers):
+            try:
+                input_batch = next(dataset)
+                self._index += 1
+                batch = self._pool.apply_async(worker.perform, 
+                                                (input_batch, ),
+                                                error_callback=error_callback)
+                async_results.append(batch)
+            except StopIteration:
+                print("StopIteration received!") # TODO: Remove
+                inputs_exhaused = True
+
+        # TODO: Also start next batches!?
+        # self._processing_queue.append(future_iteration)
+
+        training_batches = []
+        for result in async_results:
+            training_batch = result.get()
+            self._iteration += len(training_batch)
+            training_batches.append(training_batch)
+
+        return inputs_exhaused, training_batches
+    
+class RotorCiphertextDataset:
+    """Takes rotor ciphertext (with their labels) as input and returns batched
+    lists of the ciphertext lines (and their labels) as iteration result."""
+    def __init__(self, ciphertexts_with_labels, batch_size):
+        self._ciphertexts_with_labels = ciphertexts_with_labels
+        self._batch_size = batch_size
+        self._index = 0
+
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        input_length = len(self._ciphertexts_with_labels)
+        if self._index >= input_length:
+            # TODO: Restart intead!?
+            raise StopIteration()
+
+        end_index = self._index + self._batch_size
+        result = self._ciphertexts_with_labels[self._index:end_index] # TODO: Lines should also be truncated / joined to fit lengths
+
+        self._index += self._batch_size
+        return result
+    
+class PlaintextPathsDataset:
+    """Takes paths to plaintexts and returns list of size `batch_size` with lines
+    from the plaintext files."""
+
+    def __init__(self, plaintext_paths, batch_size, cipher_types, 
+                 min_text_len, max_text_len, keep_unknown_symbols):
+        self._batch_size = batch_size
+        self._min_text_len = min_text_len
+        self._max_text_len = max_text_len
+        self._keep_unknown_symbols = keep_unknown_symbols
+
+        key_lengths_count = 0
+        for cipher_t in cipher_types:
+            index = cipher_types.index(cipher_t)
+            if isinstance(config.KEY_LENGTHS[index], list):
+                key_lengths_count += len(config.KEY_LENGTHS[index])
+            else:
+                key_lengths_count += 1
+        self._key_lengths_count = key_lengths_count
+
+        plaintext_datasets = []
+        for plaintext_path in plaintext_paths:
+            plaintext_datasets.append(tf.data.TextLineDataset(plaintext_path))
+        self._plaintext_dataset = plaintext_datasets[0]
+        for plaintext_dataset in plaintext_datasets[1:]:
+            self._plaintext_dataset = self._plaintext_dataset.zip(plaintext_dataset)
+
+        self._dataset_iter = self._plaintext_dataset.__iter__()
+
+    def __iter__(self):
         return self
 
     def __next__(self):
-        processes = []
-        manager = multiprocessing.Manager()
+        """todo"""
         c = SimpleSubstitution(config.INPUT_ALPHABET, config.UNKNOWN_SYMBOL, config.UNKNOWN_SYMBOL_NUMBER)
-        # debugging does not work here!
-        result_list = manager.list()
-        if self.generate_test_data:
-            ciphertext_list = manager.list()
-        for _ in range(self.dataset_workers):
-            d = []
-            for _ in range(self.batch_size // self.key_lengths_count):
-                try:
-                    # use the basic prefilter to get the most accurate text length
-                    data = c.filter(self.iter.__next__().numpy(), self.keep_unknown_symbols)
-                    while len(data) < self.min_text_len:
-                        # add the new data to the existing to speed up the searching process.
-                        data += c.filter(self.iter.__next__().numpy(), self.keep_unknown_symbols)
-                    if len(data) > self.max_text_len != -1:
-                        d.append(data[:self.max_text_len-(self.max_text_len % 2)])
-                    else:
-                        d.append(data[:len(data)-(len(data) % 2)])
-                except:
-                    self.epoch += 1
-                    self.__iter__()
-                    data = c.filter(self.iter.__next__().numpy(), self.keep_unknown_symbols)
-                    while len(data) < self.min_text_len:
-                        data += c.filter(self.iter.__next__().numpy(), self.keep_unknown_symbols)
-                    if len(data) > self.max_text_len:
-                        d.append(data[:self.max_text_len-(self.max_text_len % 2)])
-                    else:
-                        d.append(data[:len(data)-(len(data) % 2)])
-            if self.generate_test_data:
-                process = multiprocessing.Process(target=self._worker, args=(d, result_list, ciphertext_list))
-            else:
-                process = multiprocessing.Process(target=self._worker, args=(d, result_list))
-            process.start()
-            processes.append(process)
-        if self.generate_test_data:
-            return processes, result_list, ciphertext_list
-        return processes, result_list
 
-    def _worker(self, data, result, ciphertext_list=None):
+        result = []
+        number_of_lines = self._batch_size // self._key_lengths_count
+        if number_of_lines == 0:
+            # TODO: Also warn in train.py!
+            print(f"ERROR: Batch size is too small to calculate the features for all cipher and key"
+                  f"length combinations! Current batch size: {self._batch_size}. Minimum batch size: "
+                  f"{self._key_lengths_count}.")
+            raise StopIteration
+
+        for _ in range(number_of_lines):
+            # use the basic prefilter to get the most accurate text length
+            filtered_data = c.filter(next(self._dataset_iter).numpy(), self._keep_unknown_symbols)
+            while len(filtered_data) < self._min_text_len:
+                # add the new data to the existing to speed up the searching process.
+                filtered_data += c.filter(next(self._dataset_iter).numpy(), self._keep_unknown_symbols)
+            if len(filtered_data) > self._max_text_len != -1:
+                result.append(filtered_data[:self._max_text_len-(self._max_text_len % 2)])
+            else:
+                result.append(filtered_data[:len(filtered_data)-(len(filtered_data) % 2)])
+
+            # except:
+            #     self.__iter__()
+            #     filtered_data = c.filter(self._iter.__next__().numpy(), self._keep_unknown_symbols)
+            #     while len(filtered_data) < self._min_text_len:
+            #         filtered_data += c.filter(self._iter.__next__().numpy(), self._keep_unknown_symbols)
+            #     if len(filtered_data) > self._max_text_len:
+            #         result.append(filtered_data[:self._max_text_len-(self._max_text_len % 2)])
+            #     else:
+            #         result.append(filtered_data[:len(filtered_data)-(len(filtered_data) % 2)])
+        
+        return result
+
+class ConfigParams: # TODO: Copy inputs to prevent changes through the references!
+    """Encapsulates some entries of the `config.py`. This removes the calls to global state
+    from the workers. Should help to reason about the code, especially since the workers
+    are typically executed in a concurrent process"""
+    def __init__(self, cipher_types, key_lengths, feature_engineering, pad_input):
+        # corresponds to config.CIPHER_TYPES
+        self.cipher_types = cipher_types
+        # corresponds to config.KEY_LENGTHS
+        self.key_lengths = key_lengths
+        # corresponds to config.FEATURE_ENGINEERING
+        self.feature_engineering = feature_engineering
+        #corresponds to config.PAD_INPUT
+        self.pad_input = pad_input
+
+class CiphertextLine2CipherStatisticsWorker:
+    """This class provides an iterator that returns `TrainingBatch`es.
+    It takes ciphertext lines and their corresponding labels (cipher names) and 
+    calculates the statistics (features) for those lines.
+    The size of the batches depends on the `batch_size` and `dataset_workers`. 
+    Each `dataset_worker` will calculate the statistics for `batch_size` lines of the
+    input. Therefore the output of the __next__ method will return lists of length 
+    `dataset_workers`."""
+
+    def __init__(self, config_params):
+        self._config_params = config_params
+
+    def perform(self, ciphertexts_with_labels):
+        features = []
+        labels = []
+
+        config = self._config_params
+
+        for ciphertext_line, label in ciphertexts_with_labels:
+            processed_line = self._preprocess_ciphertext_line(ciphertext_line)
+            label_index = config.cipher_types.index(label)
+            if config.feature_engineering:
+                feature = calculate_statistics(processed_line)
+                features.append(feature)
+                labels.append(label_index)
+            else:
+                features.append(processed_line)
+            
+        if config.pad_input:
+            # TODO: Fix!
+            features = pad_sequences(features, maxlen=self.max_text_len)
+            features = features.reshape(features.shape[0], features.shape[1], 1)
+        return TrainingBatch(tf.convert_to_tensor(features), tf.convert_to_tensor(labels))
+    
+    def _preprocess_ciphertext_line(self, ciphertext_line):
+        cleaned = ciphertext_line.strip().replace(' ', '').replace('\n', '')
+        mapped = self._map_text_into_numberspace(cleaned.lower())
+        return mapped
+    
+    def _map_text_into_numberspace(self, text):
+        alphabet = "abcdefghijklmnopqrstuvwxyz"
+        result = []
+        # TODO: Extend exception with additional information!?
+        for index in range(len(text)):
+            result.append(alphabet.index(text[index]))
+        return result
+
+class PlaintextLine2CipherStatisticsWorker:
+    """This class takes paths to plaintext files and provides an iterator 
+    interface, which will return batches of statistics and labels for training
+    of a classifier. Internally it will encrypt the lines of the plaintext files
+    with the given `cipher_types` and calculate the features for the encrypted 
+    lines.
+    Each `dataset_worker` will calculate the statistics for `batch_size` lines of the
+    encrypted lines. Therefore the output of the __next__ method will return lists of length 
+    `dataset_workers`. Each item in the list is of type `TrainingBatch`.
+    """
+    def __init__(self, cipher_types, max_text_len, keep_unknown_symbols, config_params):
+        self._keep_unknown_symbols = keep_unknown_symbols
+        self._cipher_types = cipher_types
+        self._max_text_len = max_text_len
+        self._config_params = config_params
+
+    def perform(self, plaintexts):
         batch = []
         labels = []
-        ciphertexts = []
-        for d in data:
-            for cipher_t in self.cipher_types:
-                index = config.CIPHER_TYPES.index(cipher_t)
-                label = self.cipher_types.index(cipher_t)
-                if isinstance(config.KEY_LENGTHS[label], list):
-                    key_lengths = config.KEY_LENGTHS[label]
+
+        config = self._config_params
+
+        for line in plaintexts:
+            for cipher_type in self._cipher_types:
+                index = config.cipher_types.index(cipher_type)
+                label = self._cipher_types.index(cipher_type) # TODO: Isn't it just equal to cipher_type!?
+                if isinstance(config.key_lengths[label], list):
+                    key_lengths = config.key_lengths[label]
                 else:
-                    key_lengths = [config.KEY_LENGTHS[label]]
+                    key_lengths = [config.key_lengths[label]]
                 for key_length in key_lengths:
-                    ciphertext = encrypt(d, index, key_length, self.keep_unknown_symbols)
-                    if config.FEATURE_ENGINEERING:
+                    ciphertext = encrypt(line, index, key_length, self._keep_unknown_symbols)
+                    if config.feature_engineering:
                         statistics = calculate_statistics(ciphertext)
                         batch.append(statistics)
                     else:
                         batch.append(list(ciphertext))
-                    if self.generate_test_data:
-                        ciphertexts.append(list(ciphertext))
                     labels.append(label)
-        if config.PAD_INPUT:
-            batch = pad_sequences(batch, maxlen=self.max_text_len)
+
+        if config.pad_input:
+            batch = pad_sequences(batch, maxlen=self._max_text_len)
             batch = batch.reshape(batch.shape[0], batch.shape[1], 1)
-        if self.generate_test_data:
-            ciphertexts = pad_sequences(ciphertexts, maxlen=self.max_text_len)
-            ciphertext_list.append(ciphertexts)
-            result.append((batch, labels))
-        else:
-            result.append((tf.convert_to_tensor(batch), tf.convert_to_tensor(labels)))
+
+        return TrainingBatch(tf.convert_to_tensor(batch), tf.convert_to_tensor(labels))
+
+class TrainingBatch:
+    """Encapsulates the calculates statistics (features) and their labels
+    for inputs."""
+    def __init__(self, statistics, labels):
+        assert len(statistics) == len(labels)
+        self.statistics = statistics
+        self.labels = labels
+
+    def __len__(self):
+        return len(self.statistics)
+    
+    def extend(self, other):
+        if not isinstance(other, TrainingBatch):
+            raise Exception("Can only extend TrainingBatch with other TrainingBatch instances")
+        self.statistics = tf.concat([self.statistics, other.statistics], 0)
+        self.labels = tf.concat([self.labels, other.labels], 0)
+
+    def tuple(self):
+        return (self.statistics, self.labels)
