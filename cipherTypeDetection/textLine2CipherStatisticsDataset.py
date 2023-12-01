@@ -1681,13 +1681,7 @@ class PlaintextPathsDataset:
                 key_lengths_count += 1
         self._key_lengths_count = key_lengths_count
 
-        plaintext_datasets = []
-        for plaintext_path in plaintext_paths:
-            plaintext_datasets.append(tf.data.TextLineDataset(plaintext_path))
-        self._plaintext_dataset = plaintext_datasets[0]
-        for plaintext_dataset in plaintext_datasets[1:]:
-            self._plaintext_dataset = self._plaintext_dataset.zip(plaintext_dataset)
-
+        self._plaintext_dataset = tf.data.TextLineDataset(plaintext_paths)
         self._dataset_iter = self._plaintext_dataset.__iter__()
 
     def __iter__(self):
