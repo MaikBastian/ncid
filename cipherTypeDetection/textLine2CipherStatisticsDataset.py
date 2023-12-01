@@ -1453,10 +1453,6 @@ class CipherStatisticsDataset:
         the beginning."""
         return self._epoch
     
-    # @epoch.setter
-    # def epoch(self, value):
-    #     self._epoch = value
-    
     @property
     def dataset_workers(self):
         """The number of workers to use when calculating the statistics of the input. This number
@@ -1494,38 +1490,6 @@ class CiphertextDatasetParameters:
         self.cipher_types = cipher_types
         self.batch_size = batch_size
         self.dataset_workers = dataset_workers
-
-
-def calculate_next_iteration(iterator): # TODO: REmove!
-    return next(iterator)
-
-class ParallelIterator: # TODO: Remove!
-
-    def __init__(self, serial_iterator, number_of_workers):
-        self._serial_iterator = serial_iterator
-        self._pool = multiprocessing_pool.Pool(2) # number_of_workers
-        self._calculating = deque()
-        self._logger = multiprocessing.log_to_stderr(logging.INFO) # TODO: Use get_logger instead!?
-
-    def __iter__(self):
-        return self
-    
-    def __next__(self):
-        error_callback = lambda error: print(f"ERROR in ParallelIterator: {error}")
-        if len(self._calculating) == 0:
-            self._logger.info("No calculating iterations. Starting two async iterations!")
-            immediate_iteration = self._pool.apply(calculate_next_iteration, (self._serial_iterator, ))
-            future_iteration = self._pool.apply_async(calculate_next_iteration, (self._serial_iterator,),
-                                                      error_callback=error_callback)
-            self._calculating.append(future_iteration)
-            return immediate_iteration
-        else:
-            self._logger.info("At least one calculating iteration. Starting one async iteration!")
-            future_iteration = self._pool.apply_async(calculate_next_iteration, (self._serial_iterator,),
-                                                      error_callback=error_callback)
-            self._calculating.append(future_iteration)
-            immediate_iteration = self._calculating.popleft()
-            return immediate_iteration.get()
 
 class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better name!?
     """This class composes both kinds of statistics dataset iterators
@@ -1626,7 +1590,6 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
                                                 error_callback=error_callback)
                 async_results.append(batch)
             except StopIteration:
-                print("StopIteration received!") # TODO: Remove
                 inputs_exhaused = True
 
         # TODO: Also start next batches!?
