@@ -19,10 +19,13 @@ from cipherTypeDetection.transformer import MultiHeadSelfAttention, TransformerB
 from cipherTypeDetection.ensembleModel import EnsembleModel
 from cipherTypeDetection.rotorCipherEnsemble import RotorCipherEnsemble
 
+import pandas as pd
+
 
 # init fast api
 app = FastAPI()
 models = {}
+meta_models = {}
 
 # allow cors
 origins = ["*"]
@@ -72,16 +75,23 @@ async def startup_event():
                 "accuracy",
                 SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
     # TODO add this in production when having at least 32 GB RAM
-    with open(os.path.join(model_path, "t99_rf_final_100.h5"), "rb") as f:
-        models["RF"] = (pickle.load(f), True, False)
+    # with open(os.path.join(model_path, "t99_rf_final_100.h5"), "rb") as f:
+    #     models["RF"] = (pickle.load(f), True, False)
     with open(os.path.join(model_path, "t128_nb_final_100.h5"), "rb") as f:
         models["NB"] = (pickle.load(f), True, False)
-    with open(os.path.join(model_path, "svm-hist"), "rb") as f:
+    with open(os.path.join(model_path, "svm-combined"), "rb") as f:
         models["SVM-Rotor"] = (pickle.load(f), True, False)
-    with open(os.path.join(model_path, "knn-hist"), "rb") as f:
+    with open(os.path.join(model_path, "knn-combined"), "rb") as f:
         models["kNN-Rotor"] = (pickle.load(f), True, False)
-    # with open(os.path.join(model_path, "rf-hist"), "rb") as f:
+    # with open(os.path.join(model_path, "rf-combined"), "rb") as f:
     #     models["RF-Rotor"] = (pickle.load(f), True, False)
+    # with open(os.path.join(model_path, "mlp-combined"), "rb") as f:
+    #     models["MLP-Rotor"] = (pickle.load(f), True, False)
+
+    with open(os.path.join(model_path, "meta-classifier"), "rb") as f:
+        meta_models["Classifier"] = pickle.load(f)
+    with open(os.path.join(model_path, "meta-classifier-scaler"), "rb") as f:
+        meta_models["Scaler"] = pickle.load(f)
 
 class ArchitectureError(Exception):
     def __init__(self, response):
@@ -145,7 +155,7 @@ async def exception_handler(request, exc):
 async def get_available_architectures():
     return {"success": True, "payload": list(models.keys())}
     
-def predict_aca_ciphers(ciphertext, architectures):
+def predict_with_aca_architectures(ciphertext, architectures):
     # only use architectures that can predict aca ciphers
     architectures = [architecture 
         for architecture in architectures 
@@ -184,15 +194,18 @@ def predict_aca_ciphers(ciphertext, architectures):
         verbose=False
     ), model)
     
-def predict_rotor_ciphers(ciphertext, architectures):
+def predict_with_rotor_architectures(ciphertext, architectures):
     # only use architectures that can predict rotor machine ciphers
     architectures = [architecture 
         for architecture in architectures 
-        if architecture in ("SVM-Rotor", "RF-Rotor", "kNN-Rotor")]
+        if architecture in ("SVM-Rotor", "RF-Rotor", "kNN-Rotor", "MLP-Rotor")]
     if len(architectures) == 0:
         return {}
     rotor_models = [models[architecture][0] for architecture in architectures]
-    return RotorCipherEnsemble(rotor_models).predict_single_line(ciphertext)
+    model_path = "data/models"
+    with open(os.path.join(model_path, "scaler"), "rb") as f:
+        scaler = pickle.load(f)
+    return RotorCipherEnsemble(rotor_models, scaler).predict_single_line(ciphertext)
 
 @app.get("/evaluate/single_line/ciphertext", response_model=APIResponse)
 async def evaluate_single_line_ciphertext(ciphertext: str, architecture: List[str] = Query([])):
@@ -203,16 +216,100 @@ async def evaluate_single_line_ciphertext(ciphertext: str, architecture: List[st
     except ArchitectureError as error:
         return error.response
     
-    try:
-        aca_prediction = predict_aca_ciphers(ciphertext, architectures)
-        rotor_ciphers_prediction = predict_rotor_ciphers(ciphertext, architectures)
-        
-        # TODO: Improve!
-        combined_prediction = aca_prediction
-        for key, probability in rotor_ciphers_prediction.items():
-            combined_prediction[key] = probability
+    def features_from_prediction(prediction, cipher_types):
+        probabilities_above_10_percent = 0
+        probabilities_below_2_percent = 0
+
+        max_probability = 0
+        max_prediction_index = -1
+
+        for cipher, probability in prediction.items():
+            if probability > 10:
+                probabilities_above_10_percent += 1
+            elif probability < 2 and probability > 0:
+                probabilities_below_2_percent += 1
+            if probability > max_probability:
+                max_probability = probability
+                max_prediction_index = cipher_types.index(cipher)
             
-        return {"success": True, "payload": combined_prediction}
+
+        percentage_of_probabilities_above_10_percent = probabilities_above_10_percent / len(prediction)
+        percentage_of_probabilities_below_2_percent = probabilities_below_2_percent / len(prediction)
+
+        return {"percentage_of_probabilities_above_10_percent": percentage_of_probabilities_above_10_percent, 
+                "percentage_of_probabilities_below_2_percent": percentage_of_probabilities_below_2_percent, 
+                "max_probability": max_probability, "index_of_max_prediction": max_prediction_index}
+    
+    try:
+        aca_architecture_prediction = predict_with_aca_architectures(ciphertext, architectures)
+        rotor_architecture_prediction = predict_with_rotor_architectures(ciphertext, architectures)
+
+        aca_cipher_types = [config.CIPHER_TYPES[cipher_index]
+                        for cipher_index in range(56)]
+        rotor_cipher_types = ["Enigma", "M209", "Purple", "Sigaba", "Typex"]
+        all_cipher_types = aca_cipher_types + rotor_cipher_types
+
+        for cipher in rotor_cipher_types:
+            aca_architecture_prediction[cipher] = 0
+        for cipher in aca_cipher_types:
+            rotor_architecture_prediction[cipher] = 0
+
+        aca_key = 0
+        rotor_key = 1
+
+        # Only use aca predictions for meta-classifier, since those results seem to better indicate
+        # what type of 'cipher group' (aca or rotor) was actually entered
+        aca_feature_dict = features_from_prediction(aca_architecture_prediction, all_cipher_types)
+        # rotor_feature_dict = features_from_prediction(rotor_architecture_prediction, all_cipher_types)
+
+        predictions_data_frame = pd.DataFrame([aca_feature_dict])
+        # predictions_data_frame = pd.DataFrame([aca_feature_dict, rotor_feature_dict])
+
+        # TODO: Skip meta classifier if only one type of architecture is selected!
+        meta_classifier = meta_models["Classifier"]
+        meta_scaler = meta_models["Scaler"]
+
+        scaled_prediction = meta_scaler.transform(predictions_data_frame.to_numpy())
+        meta_predictions = meta_classifier.predict_proba(scaled_prediction)
+
+        # TODO: Seem to be currently always 100% for either class: Why? Should be ensured, otherwise perfectly good
+        # predictions get scaled down in the loop below!
+        print(f"Meta predictions: {meta_predictions}")
+
+        aca_cipher_probability = 0
+        rotor_cipher_probability = 0
+        for prediction in meta_predictions:
+            aca_cipher_probability += prediction[0]
+            rotor_cipher_probability += prediction[1]
+        aca_cipher_probability = aca_cipher_probability / len(meta_predictions)
+        rotor_cipher_probability = rotor_cipher_probability / len(meta_predictions)
+
+        print(f"ACA probability: {aca_cipher_probability}, rotor probability: {rotor_cipher_probability}")
+
+        # TODO: Improve: No or only one arch. selected
+        # combined_prediction = {}
+        # for cipher, probability in aca_architecture_prediction.items():
+        #     combined_prediction[cipher] = probability * aca_cipher_probability
+        # for cipher, probability in rotor_architecture_prediction.items():
+        #     # TODO: Only works because the predicted ciphers are distinct
+        #     if cipher in combined_prediction:
+        #         existing_prediction = combined_prediction[cipher]
+        #         combined_prediction[cipher] = existing_prediction + probability * rotor_cipher_probability
+        #     else:
+        #         combined_prediction[cipher] = probability * rotor_cipher_probability
+
+        # print(f"Probability of aca cipher: {aca_cipher_probability}, probability of rotor cipher: {rotor_cipher_probability}.")
+
+        new_prediction = {}
+        for cipher, probability in aca_architecture_prediction.items():
+            if aca_cipher_probability > 0:
+                new_prediction[cipher] = probability * aca_cipher_probability
+        for cipher, probability in rotor_architecture_prediction.items():
+            if rotor_cipher_probability > 0:
+                new_prediction[cipher] = probability * rotor_cipher_probability
+
+        return {"success": True, "payload": new_prediction}
+        # return {"success": True, "payload": combined_prediction}
     except BaseException as e:
         # only use these lines for debugging. Never in production environment due
         # to security reasons!
