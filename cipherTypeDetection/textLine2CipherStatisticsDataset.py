@@ -1815,7 +1815,11 @@ class PlaintextLine2CipherStatisticsWorker:
                 else:
                     key_lengths = [config.key_lengths[label]]
                 for key_length in key_lengths:
-                    ciphertext = encrypt(line, index, key_length, self._keep_unknown_symbols)
+                    try:
+                        ciphertext = encrypt(line, index, key_length, self._keep_unknown_symbols)
+                    except ValueError:
+                        # TODO: Log message!
+                        continue
                     if config.feature_engineering:
                         statistics = calculate_statistics(ciphertext)
                         batch.append(statistics)
