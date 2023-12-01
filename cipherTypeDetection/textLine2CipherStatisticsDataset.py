@@ -1723,19 +1723,19 @@ class PlaintextPathsDataset:
         
         return result
 
-class ConfigParams: # TODO: Copy inputs to prevent changes through the references!
+class ConfigParams:
     """Encapsulates some entries of the `config.py`. This removes the calls to global state
     from the workers. Should help to reason about the code, especially since the workers
     are typically executed in a concurrent process"""
     def __init__(self, cipher_types, key_lengths, feature_engineering, pad_input):
         # corresponds to config.CIPHER_TYPES
-        self.cipher_types = cipher_types
+        self.cipher_types = copy.deepcopy(cipher_types)
         # corresponds to config.KEY_LENGTHS
-        self.key_lengths = key_lengths
+        self.key_lengths = copy.deepcopy(key_lengths)
         # corresponds to config.FEATURE_ENGINEERING
-        self.feature_engineering = feature_engineering
+        self.feature_engineering = copy.deepcopy(feature_engineering)
         #corresponds to config.PAD_INPUT
-        self.pad_input = pad_input
+        self.pad_input = copy.deepcopy(pad_input)
 
 class CiphertextLine2CipherStatisticsWorker:
     """This class provides an iterator that returns `TrainingBatch`es.
