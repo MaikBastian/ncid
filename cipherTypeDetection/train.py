@@ -5,6 +5,8 @@ import argparse
 import sys
 import time
 import shutil
+import csv
+import random
 from sklearn.model_selection import train_test_split
 import os
 import math
@@ -14,6 +16,10 @@ from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import StratifiedKFold
 import matplotlib.pyplot as plt
 from datetime import datetime
 # This environ variable must be set before all tensorflow imports!
@@ -25,9 +31,9 @@ import tensorflow_datasets as tfds
 sys.path.append("../")
 import cipherTypeDetection.config as config
 from cipherImplementations.cipher import OUTPUT_ALPHABET
-from cipherTypeDetection.textLine2CipherStatisticsDataset import TextLine2CipherStatisticsDataset
+from cipherTypeDetection.textLine2CipherStatisticsDataset import CiphertextDatasetParameters, PlaintextDatasetParameters, CombinedCipherStatisticsDataset
 from cipherTypeDetection.miniBatchEarlyStoppingCallback import MiniBatchEarlyStopping
-from cipherTypeDetection.transformer import TransformerBlock, TokenAndPositionEmbedding
+from cipherTypeDetection.transformer import TransformerBlock, TokenAndPositionEmbedding, MultiHeadSelfAttention
 from cipherTypeDetection.learningRateSchedulers import TimeBasedDecayLearningRateScheduler, CustomStepDecayLearningRateScheduler
 tf.debugging.set_log_device_placement(enabled=False)
 # always flush after print as some architectures like RF need very long time before printing anything.
@@ -35,6 +41,12 @@ print = functools.partial(print, flush=True)
 # for device in tf.config.list_physical_devices('GPU'):
 #    tf.config.experimental.set_memory_growth(device, True)
 
+# Used for meta-classifier pipeline
+import cipherTypeDetection.eval as cipherEval
+from cipherTypeDetection.ensembleModel import EnsembleModel
+from cipherTypeDetection.rotorCipherEnsemble import RotorCipherEnsemble
+from types import SimpleNamespace
+import pandas as pd
 
 architecture = None
 
@@ -43,7 +55,7 @@ def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
 
-def create_model():
+def create_model(extend_model, cipher_types):
     global architecture
     optimizer = Adam(
         learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, 
@@ -59,8 +71,12 @@ def create_model():
 
     # total_ny_gram_frequencies_size = int(math.pow(len(OUTPUT_ALPHABET), 2)) * 6
 
-    input_layer_size = 18 + total_frequencies_size
-    output_layer_size = len(cipher_types)
+    # old feature length: 1505
+    rotor_features = 1702
+    magic = 5
+
+    input_layer_size = 18 + total_frequencies_size + rotor_features + magic
+    output_layer_size = len(cipher_types) + len(config.ROTOR_CIPHER_TYPES)
     hidden_layer_size = int(2 * (input_layer_size / 3) + output_layer_size)
 
     # logistic regression baseline
@@ -327,31 +343,66 @@ def load_datasets_from_disk(args, cipher_types):
     print("Loading Datasets...")
     plaintext_files = []
     dir_name = os.listdir(args.input_directory)
+    max = 400
     for name in dir_name:
         path = os.path.join(args.input_directory, name)
         if os.path.isfile(path):
+            max -= 1
+            if max == 0:
+                break
             plaintext_files.append(path)
+
+    def validate_ciphertext_path(ciphertext_path, cipher_types):
+        file_name = Path(ciphertext_path).stem.lower()
+        if not file_name in cipher_types:
+            raise Exception(f"Filename must equal one of the expected cipher types. Expected cipher types are: {cipher_types}. Current filename is '{file_name}'.")
     
     # TODO: Do not hard code folder!?
-    rotor_cipher_dir = "rotor_ciphers"
-    rotor_ciphertext_files = []
+    rotor_cipher_dir = Path(args.input_directory).parent / "rotor_ciphertexts"
+    rotor_ciphertexts = []
     dir_name = os.listdir(rotor_cipher_dir)
+    max = 10000
     for name in dir_name:
         path = os.path.join(rotor_cipher_dir, name)
+        validate_ciphertext_path(path, config.ROTOR_CIPHER_TYPES)
         if os.path.isfile(path):
-            rotor_ciphertext_files.append(path)
+            with open(path, "r") as f:
+                label = Path(path).stem.lower()
+                lines = f.readlines()
+                for line in lines:
+                    max -= 1
+                    if max < 0:
+                        break
+                    rotor_ciphertexts.append((line, label))
 
+    if len(rotor_ciphertexts) >= args.max_iter * 0.7:
+        print("WARNING: A large amount of the training data will only consist of rotor machine ciphertexts!")
+                    
     train_plaintexts, test_plaintexts = train_test_split(plaintext_files, test_size=0.05, 
                                                          random_state=42, shuffle=True)
-    train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertext_files, test_size=0.05, 
+    train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertexts, test_size=0.05, 
                                                                        random_state=42, shuffle=True)
 
-    train_ds = TextLine2CipherStatisticsDataset(train, cipher_types, args.train_dataset_size, 
+    train_plaintext_parameters = PlaintextDatasetParameters(train_plaintexts, cipher_types, args.train_dataset_size, 
                                                 args.min_train_len, args.max_train_len,
                                                 args.keep_unknown_symbols, args.dataset_workers)
-    test_ds = TextLine2CipherStatisticsDataset(test, cipher_types, args.train_dataset_size,     
+    test_plaintext_parameters = PlaintextDatasetParameters(test_plaintexts, cipher_types, args.train_dataset_size,     
                                                args.min_test_len, args.max_test_len,
                                                args.keep_unknown_symbols, args.dataset_workers)
+    
+    # TODO: Move into calling function! (ROTOR_CIPHER_TYPES)
+    train_rotor_ciphertexts_parameters = CiphertextDatasetParameters(train_rotor_ciphertexts, 
+                                                            config.ROTOR_CIPHER_TYPES, 
+                                                            args.train_dataset_size,
+                                                            args.dataset_workers)
+    test_rotor_ciphertexts_parameters = CiphertextDatasetParameters(test_rotor_ciphertexts, 
+                                                            config.ROTOR_CIPHER_TYPES,
+                                                            args.train_dataset_size,
+                                                            args.dataset_workers)
+    
+    train_ds = CombinedCipherStatisticsDataset(train_plaintext_parameters, train_rotor_ciphertexts_parameters)
+    test_ds = CombinedCipherStatisticsDataset(test_plaintext_parameters, test_rotor_ciphertexts_parameters)
+
     if args.train_dataset_size % train_ds.key_lengths_count != 0:
         print("WARNING: the --train_dataset_size parameter must be dividable by the amount of --ciphers  and the length configured "
               "KEY_LENGTHS in config.py. The current key_lengths_count is %d" % 
@@ -360,7 +411,7 @@ def load_datasets_from_disk(args, cipher_types):
     return train_ds, test_ds
     
 # TODO: Better name!
-def create_model_for_hardware_config(extend_model):
+def create_model_for_hardware_config(extend_model, cipher_types):
     """Creates models depending on the GPU count and on extend_model"""
     print('Creating model...')
 
@@ -371,13 +422,13 @@ def create_model_for_hardware_config(extend_model):
         with strategy.scope():
             if extend_model is not None:
                 extend_model = tf.keras.models.load_model(extend_model, compile=False)
-            model = create_model()
+            model = create_model(extend_model, cipher_types)
         if architecture in ("FFNN", "CNN", "LSTM", "Transformer") and extend_model is None:
             model.summary()
     else:
         if extend_model is not None:
             extend_model = tf.keras.models.load_model(extend_model, compile=False)
-        model = create_model()
+        model = create_model(extend_model, cipher_types)
         if architecture in ("FFNN", "CNN", "LSTM", "Transformer") and extend_model is None:
             model.summary()
 
@@ -400,43 +451,38 @@ def train_model(model, args, train_ds):
     val_labels = None
     run = None
     run1 = None
-    processes = []
     classes = list(range(len(config.CIPHER_TYPES)))
     new_run = [[], []]
     while train_ds.iteration < args.max_iter:
         if run1 is None:
             train_epoch = 0
-            processes, run1 = train_ds.__next__()
+            run1 = next(train_ds)
         if run is None:
-            for process in processes:
-                process.join()
             run = run1
-            train_ds.iteration += train_ds.batch_size * train_ds.dataset_workers
             if train_ds.iteration < args.max_iter:
                 train_epoch = train_ds.epoch
-                processes, run1 = train_ds.__next__()
+                processes = []
+                run1 = next(train_ds)
         # use this only with decision trees
         if architecture in ("DT", "RF", "ET"):
-            for batch, labels in run:
-                new_run[0].extend(batch.numpy().tolist())
+            for statistics, labels in run.tuple():
+                new_run[0].extend(statistics.numpy().tolist())
                 new_run[1].extend(labels.numpy().tolist())
             if train_ds.iteration < args.max_iter:
                 run = None
                 print("Loaded %d ciphertexts." % train_ds.iteration)
                 continue
             print("Loaded %d ciphertexts." % train_ds.iteration)
-            for process in processes:
-                if process.is_alive():
-                    process.terminate()
             new_run = [(tf.convert_to_tensor(new_run[0]), tf.convert_to_tensor(new_run[1]))]
             run = new_run
-        for batch, labels in run:
+        for training_batch in run:
+            statistics, labels = training_batch.tuple()
             cntr += 1
             train_iter = args.train_dataset_size * cntr
             if cntr == 1:
-                batch, val_data, labels, val_labels = train_test_split(batch.numpy(), labels.numpy(), 
+                statistics, val_data, labels, val_labels = train_test_split(statistics.numpy(), labels.numpy(), 
                                                                        test_size=0.1)
-                batch = tf.convert_to_tensor(batch)
+                statistics = tf.convert_to_tensor(statistics)
                 val_data = tf.convert_to_tensor(val_data)
                 labels = tf.convert_to_tensor(labels)
                 val_labels = tf.convert_to_tensor(val_labels)
@@ -446,7 +492,7 @@ def train_model(model, args, train_ds):
             if architecture in ("DT", "RF", "ET"):
                 train_iter = len(labels) * 0.9
                 print("Start training the decision tree.")
-                history = model.fit(batch, labels)
+                history = model.fit(statistics, labels)
                 if architecture == "DT":
                     plt.gcf().set_size_inches(25, 25 / math.sqrt(2))
                     print("Plotting tree.")
@@ -456,19 +502,19 @@ def train_model(model, args, train_ds):
 
             # Naive Bayes training
             elif architecture == "NB":
-                history = model.partial_fit(batch, labels, classes=classes)
+                history = model.partial_fit(statistics, labels, classes=classes)
 
             # FFNN, NB
             elif architecture == "[FFNN,NB]":
-                history = model[0].fit(batch, labels, batch_size=args.batch_size, 
+                history = model[0].fit(statistics, labels, batch_size=args.batch_size, 
                                        validation_data=(val_data, val_labels), epochs=args.epochs,
                                        callbacks=[early_stopping_callback, tensorboard_callback,    
                                                   custom_step_decay_lrate_callback])
                 # time_based_decay_lrate_callback.iteration = train_iter
-                history = model[1].partial_fit(batch, labels, classes=classes)
+                history = model[1].partial_fit(statistics, labels, classes=classes)
 
             else:
-                history = model.fit(batch, labels, batch_size=args.batch_size, 
+                history = model.fit(statistics, labels, batch_size=args.batch_size, 
                                     validation_data=(val_data, val_labels), epochs=args.epochs,
                                     callbacks=[early_stopping_callback, tensorboard_callback, 
                                                custom_step_decay_lrate_callback])
@@ -477,12 +523,12 @@ def train_model(model, args, train_ds):
             # print for Decision Tree, Naive Bayes and Random Forests
             if architecture in ("DT", "NB", "RF", "ET"):
                 val_score = model.score(val_data, val_labels)
-                train_score = model.score(batch, labels)
+                train_score = model.score(statistics, labels)
                 print("train accuracy: %f, validation accuracy: %f" % (train_score, val_score))
 
             if architecture == "[FFNN,NB]":
                 val_score = model[1].score(val_data, val_labels)
-                train_score = model[1].score(batch, labels)
+                train_score = model[1].score(statistics, labels)
                 print("train accuracy: %f, validation accuracy: %f" % (train_score, val_score))
 
             if train_epoch > 0:
@@ -493,9 +539,6 @@ def train_model(model, args, train_ds):
         if train_ds.iteration >= args.max_iter or early_stopping_callback.stop_training:
             break
         run = None
-    for process in processes:
-        if process.is_alive():
-            process.terminate()
 
     elapsed_training_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
     training_stats = 'Finished training in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
@@ -534,7 +577,7 @@ def save_model(model, args):
         shutil.move('../data/logs', '../data/' + model_name.split('.')[0] + '_tensorboard_logs')
     print('Model saved.\n')
     
-def predict_test_data(model, args, early_stopping_callback, train_iter):
+def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter):
     """Testing the predictions of the model"""
     print('Predicting test data...\n')
     start_time = time.time()
@@ -637,21 +680,7 @@ def expand_cipher_groups(cipher_types):
             expanded.append(config.CIPHER_TYPES[i])
     return expanded
 
-if __name__ == "__main__":
-    args = parse_arguments()
-    for arg in vars(args):
-        print("{:23s}= {:s}".format(arg, str(getattr(args, arg))))
-
-    m = os.path.splitext(args.model_name)
-    if len(os.path.splitext(args.model_name)) != 2 or os.path.splitext(args.model_name)[1] != '.h5':
-        print('ERROR: The model name must have the ".h5" extension!', file=sys.stderr)
-        sys.exit(1)
-
-    args.input_directory = os.path.abspath(args.input_directory)
-    args.ciphers = args.ciphers.lower()
-    architecture = args.architecture
-    cipher_types = args.ciphers.split(',')
-
+def aca_pipeline(cipher_types):
     extend_model = args.extend_model
     if extend_model is not None:
         if architecture not in ('FFNN', 'CNN', 'LSTM'):
@@ -663,8 +692,8 @@ if __name__ == "__main__":
             sys.exit(1)
 
     cipher_types = expand_cipher_groups(cipher_types)
-            
-    config.CIPHER_TYPES = cipher_types
+    # config.CIPHER_TYPES = cipher_types
+
     if args.train_dataset_size * args.dataset_workers > args.max_iter:
         print("ERROR: --train_dataset_size * --dataset_workers must not be bigger than --max_iter. "
               "In this case it was %d > %d" % 
@@ -675,17 +704,368 @@ if __name__ == "__main__":
     if should_download_datasets(args):
         download_datasets(args)
 
-    train_ds, test_ds = load_datasets_from_disk()
+    train_ds, test_ds = load_datasets_from_disk(args, cipher_types)
     
     # print("DONE!")
     # sys.exit(0)
 
-    model = create_model_for_hardware_config(extend_model)
+    # ACA ciphers
+    model = create_model_for_hardware_config(extend_model, cipher_types)
     early_stopping_callback, train_iter, training_stats = train_model(model, args, train_ds)
-    save_model(model)
-    prediction_stats, incorrect = predict_test_data(model, args, early_stopping_callback, train_iter)
+    save_model(model, args)
+    prediction_stats, incorrect = predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
     
     print(training_stats)
     print(prediction_stats)
 
     print("Incorrect prediction counts: %s" % incorrect)
+
+def rotor_pipeline():
+    # create rotor models
+
+    # save rotor models
+
+    pass
+
+# class PredictionResult:
+#     def __init__(self, prediction, cipher):
+#         self.prediction = prediction
+#         self.cipher = cipher
+
+def meta_classifier_pipeline():
+    # TODO: ensure all architectures are trained!
+
+
+    # breakpoint()
+
+    # load aca classifiers
+    model_path = Path("../data/models")
+    try:
+        transformer = tf.keras.models.load_model(
+                os.path.join(model_path, "t96_transformer_final_100.h5"),
+                custom_objects={
+                    'TokenAndPositionEmbedding': TokenAndPositionEmbedding,
+                    'MultiHeadSelfAttention': MultiHeadSelfAttention,
+                    'TransformerBlock': TransformerBlock})
+        ffnn = tf.keras.models.load_model(
+                os.path.join(model_path, "t128_ffnn_final_100.h5"))
+        lstm = tf.keras.models.load_model(
+                os.path.join(model_path, "t129_lstm_final_100.h5"))
+        optimizer = Adam(
+            learning_rate=config.learning_rate,
+            beta_1=config.beta_1,
+            beta_2=config.beta_2,
+            epsilon=config.epsilon,
+            amsgrad=config.amsgrad)
+        for model in [transformer, ffnn, lstm]:
+            model.compile(
+                optimizer=optimizer,
+                loss="sparse_categorical_crossentropy",
+                metrics=[
+                    "accuracy",
+                    SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
+        with open(os.path.join(model_path, "t99_rf_final_100.h5"), "rb") as f:
+            rfc = pickle.load(f)
+        with open(os.path.join(model_path, "t128_nb_final_100.h5"), "rb") as f:
+            nbc = pickle.load(f)
+        aca_classifiers = [transformer, ffnn, lstm, rfc, nbc]
+    except OSError as error:
+        print("ERROR: \n"
+              "At least one of the expected models for recognition of ACA ciphers for "
+              "training of the meta classifier is missing. \n"
+              "Expected filenames of models are: 't96_transformer_final_100.h5', "
+              "'t128_ffnn_final_100.h5', 't129_lstm_final_100.h5', 't99_rf_final_100.h5' "
+              "and 't128_nb_final_100.h5'. These models should be saved in 'data/models'.")
+        sys.exit(1)
+
+    # create rotor classifiers
+    try:
+        with open(os.path.join(model_path, "svm-combined"), "rb") as f:
+            svm = pickle.load(f)
+        with open(os.path.join(model_path, "knn-combined"), "rb") as f:
+            knn = pickle.load(f)
+        # with open(os.path.join(model_path, "rf-combined"), "rb") as f:
+        #     rf2 = pickle.load(f)
+        # with open(os.path.join(model_path, "mlp-combined"), "rb") as f:
+        #     mlp = pickle.load(f)
+        # TODO: Also the rest!
+        rotor_classifiers = [svm, knn]
+    except FileNotFoundError as error:
+        # TODO: Extend error message with model names!
+        print("ERROR: \n"
+              "At least one of the expected models for recognition of Rotor ciphers for "
+              "training of the meta classifier is missing. \n"
+              "Expected filenames of models are: 'svm-combined' and "
+              "'knn-combined'. These models should be saved in 'data/models'.")
+        sys.exit(1)
+
+    try:
+        with open(os.path.join(model_path, "scaler"), "rb") as f:
+            scaler = pickle.load(f)
+    except FileNotFoundError as error:
+        print("ERROR: \n. "
+              "Could not load the scikit-learn StandardScaler. It is expected at the "
+              "path 'data/models/scaler")
+        sys.exit(1)
+
+
+    # TODO: generate ciphertexts for aca architectures
+
+    def load_ciphertext_lines(dir, *, upto_length):
+        """Loads ciphertexts (with file ending .txt) in directory dir and converts them to
+        a list of lines of max length upto_length. The resulting lines are randomized.
+        upto_length should be at least 1000.
+        """
+        upto_length = max(10, upto_length) # TODO: Back to 1000
+
+        files = [x for x in dir.iterdir() if x.is_file() and x.suffix == ".txt"]
+        result = []
+
+        # use some upper limites to limit memory usage
+        max_files = math.floor(upto_length / 10)
+        max_lines = 1000
+
+        random_files = random.sample(files, max_files) if len(files) > max_files else files
+        for file in random_files:
+            with open(file, "r") as f:
+                lines = f.readlines()
+                random_lines = random.sample(lines, max_lines) if len(lines) > max_lines else lines
+                for line in random_lines:
+                    processed_line = line.lower() # TODO: Also remove invalid chars, etc.!
+                    result.append(processed_line)
+
+        return random.sample(result, upto_length) if len(result) > upto_length else result
+    
+    aca_cipher_types = [config.CIPHER_TYPES[cipher_index]
+                        for cipher_index in range(56)]
+    aca_cipher_indices = [config.CIPHER_TYPES.index(cipher_type) 
+                          for cipher_type in aca_cipher_types]
+    rotor_cipher_types = ["Enigma", "M209", "Purple", "Sigaba", "Typex"]
+    all_cipher_types = aca_cipher_types + rotor_cipher_types
+    
+    def predict_with_aca_architectures(ciphertext_lines):
+        cipherEval.architecture = "Ensemble"
+        aca_ensemble = EnsembleModel(aca_classifiers,
+                            ["Transformer", "FFNN", "LSTM", "RF", "NB"],
+                            "weighted",
+                            aca_cipher_indices)
+        
+        aca_architecture_predictions = []
+        for index, value in enumerate(ciphertext_lines):
+            line, cipher_type = value[0], value[1]
+            prediction = cipherEval.predict_single_line(SimpleNamespace(
+                ciphertext=line,
+                # todo: needs fileupload first (either set ciphertext OR file, never both)
+                file=None,
+                ciphers=aca_cipher_types,
+                batch_size=128,
+                verbose=False
+            ), aca_ensemble)
+            prediction = prediction
+            for cipher in rotor_cipher_types:
+                prediction[cipher] = 0
+            aca_architecture_predictions.append([prediction, cipher_type])
+            if index % 100 == 0:
+                print(f"Predicted {index} / {len(ciphertext_lines)} ciphers with the ACA architectures.")
+        
+        return aca_architecture_predictions
+    
+    def predict_with_rotor_architectures(ciphertext_lines):
+        rotor_architecture_predictions = []
+
+        rotor_ensemble = RotorCipherEnsemble(rotor_classifiers, scaler)
+        for value in ciphertext_lines:
+            line, cipher_type = value[0], value[1]
+            prediction = rotor_ensemble.predict_single_line(line.upper())
+            for cipher in aca_cipher_types:
+                prediction[cipher] = 0
+            rotor_architecture_predictions.append([prediction, cipher_type])
+
+        return rotor_architecture_predictions
+    
+    def write_predictions_to_disk(predictions, file_path):
+        with open(file_path, "w") as f:
+            writer = csv.writer(f, delimiter=',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
+            keys = ["actual_cipher"] + list(predictions[0][0].keys())
+            writer.writerow(keys)
+            for prediction in predictions:
+                writer.writerow([prediction[1]] + list(prediction[0].values()))
+
+    # load ciphertexts
+    ciphertext_dir = Path("../encrypted_samples")
+    aca_ciphertext_lines = load_ciphertext_lines(ciphertext_dir / "aca-ciphertexts", upto_length=5000) # 5000!
+    rotor_ciphertext_lines = load_ciphertext_lines(ciphertext_dir / "rotor-ciphertexts", upto_length=5000)
+
+    # combine both ciphertext types together with labels for each type
+    aca_df = pd.DataFrame(aca_ciphertext_lines)
+    aca_df["cipher_type"] = "ACA"
+    rotor_df = pd.DataFrame(rotor_ciphertext_lines)
+    rotor_df["cipher_type"] = "Rotor"
+    ciphertext_lines = pd.concat([aca_df, rotor_df]).to_numpy() # TODO: Remove limit!
+
+    # get predictions from classifiers for all ciphertexts
+    aca_architecture_predictions = predict_with_aca_architectures(ciphertext_lines)
+    # rotor_architecture_predictions = predict_with_rotor_architectures(ciphertext_lines)
+
+    # create and train meta classifier
+    aca_architecture_features = list(map(lambda x: features_from_prediction(x[0], all_cipher_types),
+                                     aca_architecture_predictions))
+    # rotor_architecture_features = list(map(lambda x: features_from_prediction(x[0], all_cipher_types), 
+    #                                    rotor_architecture_predictions))
+
+    feature_names = ["percentage_of_probabilities_above_10_percent", 
+                     "percentage_of_probabilities_below_2_percent", 
+                     "max_probability", "index_of_max_prediction"]
+    
+    feature_dict = {}
+    for feature_name in feature_names:
+        feature_dict[feature_name] = [value[feature_name] for value in aca_architecture_features]
+        # feature_dict[feature_name] = ([value[feature_name] for value in aca_architecture_features] + 
+        #                         [value[feature_name] for value in rotor_architecture_features])
+        
+    aca_key = 0
+    rotor_key = 1
+
+    # feature_dict["classifier"] = ([aca_key] * len(aca_architecture_features) + 
+    #                               [rotor_key] * len(rotor_architecture_features))
+    
+    feature_dict["cipher"] = [aca_key if value[1] == "ACA" else rotor_key 
+                               for value in aca_architecture_predictions]
+    # feature_dict["cipher"] = ([aca_key if value[1] == "ACA" else rotor_key 
+    #                            for value in aca_architecture_predictions] + 
+    #                           [aca_key if value[1] == "ACA" else rotor_key 
+    #                            for value in rotor_architecture_predictions])
+    
+    predictions_df = pd.DataFrame(feature_dict)
+    # write dataframe to disk
+    predictions_df.to_csv(ciphertext_dir / "feature_predictions.csv")
+ 
+    # predictions_df = pd.read_csv(ciphertext_dir / "feature_predictions.csv", index_col=[0])
+    # # predictions_df = predictions_df.drop("percentage_of_probabilities_above_10_percent", axis=1)
+    # predictions_df = predictions_df.drop("median_probability", axis=1)
+    # predictions_df = predictions_df.iloc[:400]
+
+    y = predictions_df["cipher"].to_numpy()
+    X = predictions_df.drop("cipher", axis=1).to_numpy()
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, shuffle=True, stratify=y)
+
+    meta_scaler = StandardScaler()
+
+    X_train_scaled = meta_scaler.fit_transform(X_train)
+    X_test_scaled = meta_scaler.transform(X_test)
+
+    def train_knn():
+        cv_method = StratifiedKFold(n_splits=10, shuffle=True)
+        meta_classifier = GridSearchCV(KNeighborsClassifier(), 
+                                    param_grid={"n_neighbors": [1, 2, 3, 5, 8, 10, 15], 
+                                                "weights": ("distance", "uniform"),
+                                                "metric": ('euclidean', 'manhattan')},
+                                    cv=cv_method,
+                                    scoring="accuracy",
+                                    return_train_score=False,
+                                    verbose=1)
+
+        meta_classifier.fit(X_train_scaled, y_train)
+        score = meta_classifier.score(X_test_scaled, y_test)
+        print(f"Score of kNN meta classifier: {score}")
+        print(f"Best kNN params: {meta_classifier.best_params_}")
+        print(f"Best kNN score: {meta_classifier.best_score_}")
+
+        with open(model_path / "kNN-meta-classifier", "wb") as f:
+            pickle.dump(meta_classifier, f)
+        with open(model_path / "kNN-meta-classifier-scaler", "wb") as f:
+            pickle.dump(meta_scaler, f)
+
+    def train_svm():
+        cv_method = StratifiedKFold(n_splits=10, shuffle=True)
+        meta_classifier = GridSearchCV(SVC(), # probability=True
+                                    param_grid=[
+        {"kernel": ["rbf"], "gamma": [1e-3, 1e-4], "C": [1, 10, 100]}
+    ],
+                                    cv=cv_method,
+                                    scoring="accuracy",
+                                    refit=True,
+                                    verbose=1)
+
+        meta_classifier.fit(X_train_scaled, y_train)
+        score = meta_classifier.score(X_test_scaled, y_test)
+        print(f"Score of SVM meta classifier: {score}")
+        print(f"Best SVM params: {meta_classifier.best_params_}")
+        print(f"Best SVM score: {meta_classifier.best_score_}")
+
+        with open(model_path / "svm-meta-classifier", "wb") as f:
+            pickle.dump(meta_classifier, f)
+        with open(model_path / "svm-meta-classifier-scaler", "wb") as f:
+            pickle.dump(meta_scaler, f)
+    
+    # Fitting 10 folds for each of 28 candidates, totalling 280 fits
+    # [Parallel(n_jobs=1)]: Done  49 tasks      | elapsed:    2.3s
+    # [Parallel(n_jobs=1)]: Done 199 tasks      | elapsed:   10.5s
+    # Score of kNN meta classifier: 0.9544
+    # Best kNN params: {'metric': 'manhattan', 'n_neighbors': 15, 'weights': 'uniform'}
+    # Best kNN score: 0.952
+    # Fitting 10 folds for each of 6 candidates, totalling 60 fits
+    # [Parallel(n_jobs=1)]: Done  49 tasks      | elapsed:   29.7s
+    # Score of SVM meta classifier: 0.9252
+    # Best SVM params: {'C': 100, 'gamma': 0.001, 'kernel': 'rbf'}
+    # Best SVM score: 0.9210666666666667
+    train_knn()
+    train_svm()
+
+def features_from_prediction(prediction, cipher_types):
+        probabilities_above_10_percent = 0
+        probabilities_below_2_percent = 0
+
+        max_probability = 0
+        max_prediction_index = -1
+
+        for cipher, probability in prediction.items():
+            if probability > 10:
+                probabilities_above_10_percent += 1
+            elif probability < 2 and probability > 0:
+                probabilities_below_2_percent += 1
+            if probability > max_probability:
+                max_probability = probability
+                max_prediction_index = cipher_types.index(cipher)
+            
+
+        percentage_of_probabilities_above_10_percent = probabilities_above_10_percent / len(prediction)
+        percentage_of_probabilities_below_2_percent = probabilities_below_2_percent / len(prediction)
+
+        return {"percentage_of_probabilities_above_10_percent": percentage_of_probabilities_above_10_percent, 
+                "percentage_of_probabilities_below_2_percent": percentage_of_probabilities_below_2_percent, 
+                "max_probability": max_probability, "index_of_max_prediction": max_prediction_index}
+
+if __name__ == "__main__":
+    args = parse_arguments()
+
+    cpu_count = os.cpu_count()
+    if cpu_count and cpu_count < args.dataset_workers:
+        print("WARNING: More dataset_workers set than CPUs available.")
+
+    for arg in vars(args):
+        print("{:23s}= {:s}".format(arg, str(getattr(args, arg))))
+
+    m = os.path.splitext(args.model_name)
+    if len(os.path.splitext(args.model_name)) != 2 or os.path.splitext(args.model_name)[1] != '.h5':
+        print('ERROR: The model name must have the ".h5" extension!', file=sys.stderr)
+        sys.exit(1)
+
+    create_meta_classifier = False
+    if create_meta_classifier:
+        meta_classifier_pipeline()
+    else:
+        args.input_directory = os.path.abspath(args.input_directory)
+        args.ciphers = args.ciphers.lower()
+        architecture = args.architecture
+        cipher_types = args.ciphers.split(',')
+
+        if architecture in ("LSTM", "FFNN"):
+            aca_pipeline(cipher_types)
+        elif architecture in ("SVM-Rotor", "kNN-Rotor", "RF-Rotor"):
+            rotor_pipeline()
+        else:
+            print("Unknown architecture")
+            sys.exit(1)
+
+    
