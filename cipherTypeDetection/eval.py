@@ -17,7 +17,7 @@ sys.path.append("../")
 from util.utils import map_text_into_numberspace
 from util.utils import print_progress
 import cipherTypeDetection.config as config
-from cipherTypeDetection.textLine2CipherStatisticsDataset import TextLine2CipherStatisticsDataset, calculate_statistics, pad_sequences
+from cipherTypeDetection.textLine2CipherStatisticsDataset import PlaintextLine2CipherStatisticsWorker, calculate_statistics, pad_sequences
 from cipherTypeDetection.ensembleModel import EnsembleModel
 from cipherTypeDetection.transformer import MultiHeadSelfAttention, TransformerBlock, TokenAndPositionEmbedding
 from util.utils import get_model_input_length

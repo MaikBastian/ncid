@@ -2,9 +2,9 @@ import numpy as np
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
-from cipherTypeDetection.textLine2CipherStatisticsDataset import calculate_histogram
-from cipherTypeDetection.textLine2CipherStatisticsDataset import calculate_digrams
-from cipherTypeDetection.textLine2CipherStatisticsDataset import calculate_cipher_sequence
+from cipherTypeDetection.textLine2CipherStatisticsDataset import calculate_histogram_alphabetical
+from cipherTypeDetection.textLine2CipherStatisticsDataset import calculate_digrams_alphabetical
+from cipherTypeDetection.textLine2CipherStatisticsDataset import calculate_cipher_sequence_alphabetical
 
 # TODO: Do not hard code here!
 rotor_classes = ["Enigma", "M209", "Purple", "Sigaba", "Typex"]
@@ -16,9 +16,9 @@ class RotorCipherEnsemble:
         self.scaler = scaler
         
     def predict_single_line(self, ciphertext_line):
-        features = [calculate_histogram(ciphertext_line) +
-                    calculate_digrams(ciphertext_line) + 
-                    calculate_cipher_sequence(ciphertext_line)]
+        features = [calculate_histogram_alphabetical(ciphertext_line) +
+                    calculate_digrams_alphabetical(ciphertext_line) + 
+                    calculate_cipher_sequence_alphabetical(ciphertext_line)]
         prediction = [0] * number_of_rotor_classes
         for model in self.models:
             # TODO: Not only SVCs need a scaler
