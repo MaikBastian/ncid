@@ -1432,90 +1432,32 @@ def pad_sequences(sequences, maxlen):
 
 
 class CipherStatisticsDataset:
-    """Base class for cipher statistics datasets. The concrete dataset subclasses take some inputs
-    (e.g. plaintext files or ciphertexts), do some processing (e.g. filtering of the characters and
-    encryption) and finally calculate the statistics for these inputs. The datasets provide a 
-    iterator interface, that returns the calculated statistics and their labels as 
-    `TrainingBatch`es. The number of training batches that are returned by each iteration depend
-    on `dataset_workers`. The length of the statistics and labels of each `TrainingBatch` match
-    `batch_size`."""
-
-    def __init__(self, iteration, epoch, dataset_workers, batch_size):
-        self._iteration = iteration
-        self._dataset_workers = dataset_workers
-        self._epoch = epoch
-        self._batch_size = batch_size
-
-    @property
-    def iteration(self):
-        """The iteration corresponds to the number of lines processed by the dataset."""
-        return self._iteration
-    
-    @property
-    def epoch(self):
-        """If the epoch is increased, the dataset will restart iterating it's inputs from
-        the beginning."""
-        return self._epoch
-    
-    @property
-    def dataset_workers(self):
-        """The number of workers to use when calculating the statistics of the input. This number
-        also equals the number of `TrainingBatch`es returned by `__next__`."""
-        return self._dataset_workers
-    
-    @property
-    def batch_size(self):
-        """The amount of input lines each worker process will process. This property influences
-        the length of the returned `TrainingBatch`es of iterator method `__next__`."""
-        return self._batch_size
-    
-class PlaintextPathsDatasetParameters:
-    """Encapsulates the parameters of `PlaintextPathsDataset`. These parameters are used
-    for the initialization of the dataset itself, as well as for the worker processes and
-    the main statistics dataset."""
-
-    def __init__(self, plaintext_paths, cipher_types, batch_size, min_text_len, max_text_len, 
-                 keep_unknown_symbols=False, dataset_workers=None,
-                 generate_test_data=False):
-        self.plaintext_paths = plaintext_paths
-        self.cipher_types = cipher_types
-        self.batch_size = batch_size
-        self.min_text_len = min_text_len
-        self.max_text_len = max_text_len
-        self.keep_unknown_symbols = keep_unknown_symbols
-        self.dataset_workers = dataset_workers
-        self.generate_test_data = generate_test_data
-
-class RotorCiphertextsDatasetParameters:
-    """Encapsulates the parameters of `RotorCiphertextsDataset`. These parameters are used
-    for the initialization of the dataset itself, as well as for the worker processes and
-    the main statistics dataset."""
-
-    def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers):
-        self.ciphertexts_with_labels = ciphertexts_with_labels
-        self.cipher_types = cipher_types
-        self.batch_size = batch_size
-        self.dataset_workers = dataset_workers
-
-class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better name!?
-    """This class composes both kinds of statistics dataset iterators
-    (CipherTextLine2CipherStatisticsDataset and PlainTextLine2CipherStatisticsDataset).
-    It provides an iterator interface as well. This interface will return the same
-    lists of `TrainingBatch`es as the composed classes. (See their documentation
-    for more details!). The first iterations will return the results from 
-    CipherTextLine2CipherStatisticsDataset until they are depleted."""
+    """This classes takes inputs for the composed `PlaintextPathsDataset` and 
+    `RotorCiphertextsDataset`, does some processing (e.g. filtering of the characters and
+    encryption) and finally calculate the statistics for the inputs. 
+    The class provides a iterator interface which returns the calculated statistics and their 
+    labels as `TrainingBatch`es. The number of training batches that are returned by each iteration 
+    depend on `dataset_workers`. The length of the statistics and labels of each `TrainingBatch` 
+    match `batch_size`.
+    To process the inputs, `dataset_workers` processes are used to calculate the statistics
+    in parallel. The processes are organized in process pools to keep the overhead for small
+    `batch_size`es small. To limit the time each iteration takes, brefore returning the current
+    iterations results, new processes for the next iteration are already started and moved into
+    the `_processing_queue`.
+    """
 
     def __init__(self, plaintext_dataset_params, rotor_ciphertext_dataset_params):
         assert plaintext_dataset_params.batch_size == rotor_ciphertext_dataset_params.batch_size
         assert plaintext_dataset_params.dataset_workers == rotor_ciphertext_dataset_params.dataset_workers
 
         batch_size = plaintext_dataset_params.batch_size
+        dataset_workers = plaintext_dataset_params.dataset_workers
 
-        super().__init__(iteration=0, epoch=0, 
-                         dataset_workers=plaintext_dataset_params.dataset_workers, 
-                         batch_size=batch_size)
+        self._iteration = 0
+        self._epoch = 0
+        self._dataset_workers = dataset_workers
+        self._batch_size = batch_size
         
-        self._index = 0
         self._pool = multiprocessing_pool.Pool(self._dataset_workers)
         # double ended queue for storing asynchronously processing functions
         self._processing_queue = deque() 
@@ -1537,10 +1479,34 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
                                                         plaintext_params.keep_unknown_symbols)
         self._ciphertext_dataset = RotorCiphertextsDataset(ciphertext_params.ciphertexts_with_labels, 
                                                           self._batch_size)
-        
+    
+    @property
+    def iteration(self):
+        """The iteration corresponds to the number of lines processed by the dataset."""
+        return self._iteration
+    
+    @property
+    def epoch(self):
+        """Each epoch represents the processing of all available inputs. If the epoch is 
+        increased, the dataset will restart iterating it's inputs from the beginning."""
+        return self._epoch
+    
+    @property
+    def dataset_workers(self):
+        """The number of parallel workers to use when calculating the statistics of the input. 
+        This number also equals the number of `TrainingBatch`es returned by `__next__`."""
+        return self._dataset_workers
+    
+    @property
+    def batch_size(self):
+        """The amount of input lines each worker process will process. This property influences
+        the length of the returned `TrainingBatch`es of iterator method `__next__`."""
+        return self._batch_size
+    
+    @property
     def key_lengths_count(self):
         """Returns the combined count of all key length values for all supported ciphers
-        of the plaintext path dataset.
+        of the plaintext path dataset. See also `config.KEY_LENGTHS`.
         """
         return self._plaintext_dataset.key_lengths_count
     
@@ -1549,7 +1515,7 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
     
     def __next__(self):
         config_params = ConfigParams(config.CIPHER_TYPES, config.KEY_LENGTHS, 
-                                         config.FEATURE_ENGINEERING, config.PAD_INPUT)
+                                     config.FEATURE_ENGINEERING, config.PAD_INPUT)
         
         # init epoch on first iteration
         if self._epoch == 0:
@@ -1575,7 +1541,7 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
                 worker, dataset=self._plaintext_dataset)
             result.extend(plaintext_result)
         if plaintext_inputs_exhausted:
-            print(f"Ciphertexts and plaintexts of epoch{self._epoch} exhausted! Resetting iterators!")
+            print(f"Ciphertexts and plaintexts of epoch {self._epoch} exhausted! Resetting iterators!")
             # All inputs exhausted: Increase epoch, re-initialize datasets and therefore begin 
             # iteration from the start.
             self._epoch += 1
@@ -1592,16 +1558,12 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
         for _ in range(self._dataset_workers):
             try:
                 input_batch = next(dataset)
-                self._index += 1
                 batch = self._pool.apply_async(worker.perform, 
                                                 (input_batch, ),
                                                 error_callback=error_callback)
                 async_results.append(batch)
             except StopIteration:
                 inputs_exhaused = True
-
-        # TODO: Also start next batches!?
-        # self._processing_queue.append(future_iteration)
 
         training_batches = []
         for result in async_results:
@@ -1610,6 +1572,17 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
             training_batches.append(training_batch)
 
         return inputs_exhaused, training_batches
+
+class RotorCiphertextsDatasetParameters:
+    """Encapsulates the parameters of `RotorCiphertextsDataset`. These parameters are used
+    for the initialization of the dataset itself, as well as for the worker processes and
+    the main statistics dataset."""
+
+    def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers):
+        self.ciphertexts_with_labels = ciphertexts_with_labels
+        self.cipher_types = cipher_types
+        self.batch_size = batch_size
+        self.dataset_workers = dataset_workers
     
 class RotorCiphertextsDataset:
     """Takes rotor ciphertext (with their labels) as input and returns batched
@@ -1634,6 +1607,23 @@ class RotorCiphertextsDataset:
 
         self._index += self._batch_size
         return result
+    
+class PlaintextPathsDatasetParameters:
+    """Encapsulates the parameters of `PlaintextPathsDataset`. These parameters are used
+    for the initialization of the dataset itself, as well as for the worker processes and
+    the main statistics dataset."""
+
+    def __init__(self, plaintext_paths, cipher_types, batch_size, min_text_len, max_text_len, 
+                 keep_unknown_symbols=False, dataset_workers=None,
+                 generate_test_data=False):
+        self.plaintext_paths = plaintext_paths
+        self.cipher_types = cipher_types
+        self.batch_size = batch_size
+        self.min_text_len = min_text_len
+        self.max_text_len = max_text_len
+        self.keep_unknown_symbols = keep_unknown_symbols
+        self.dataset_workers = dataset_workers
+        self.generate_test_data = generate_test_data
     
 class PlaintextPathsDataset:
     """Takes paths to plaintexts and returns list of size `batch_size` with lines
