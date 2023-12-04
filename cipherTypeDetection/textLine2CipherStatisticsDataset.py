@@ -1510,6 +1510,10 @@ class CipherStatisticsDataset:
         """
         return self._plaintext_dataset.key_lengths_count
     
+    def stop_outstanding_tasks(self):
+        self._pool.terminate()
+        self._processing_queue = deque()
+    
     def __iter__(self):
         return self
     
@@ -1521,57 +1525,70 @@ class CipherStatisticsDataset:
         if self._epoch == 0:
             self._epoch = 1
 
-        result = []
         ciphertext_inputs_exhausted = False
         plaintext_inputs_exhausted = False
 
         # process rotor cipher datasets
         worker = CiphertextLine2CipherStatisticsWorker(config_params)
-        ciphertext_inputs_exhausted, result = self._perform_concurrent(
-            worker, 
-            dataset=self._ciphertext_dataset)
+        ciphertext_inputs_exhausted = self._dispatch_concurrent(
+            worker, dataset=self._ciphertext_dataset)
+        
         if ciphertext_inputs_exhausted:
-            print(f"Ciphertexts of epoch{self._epoch} exhausted!")
+            print(f"CipherStatisticsDataset: Ciphertexts of epoch{self._epoch} exhausted!")
             # process plaintext datasets once rotor cipher datasets are exhausted
             worker = PlaintextLine2CipherStatisticsWorker(self._plaintext_dataset_params.cipher_types, 
                                                           self._plaintext_dataset_params.max_text_len, 
                                                           self._plaintext_dataset_params.keep_unknown_symbols,
                                                           config_params)
-            plaintext_inputs_exhausted, plaintext_result = self._perform_concurrent(
+            plaintext_inputs_exhausted = self._dispatch_concurrent(
                 worker, dataset=self._plaintext_dataset)
-            result.extend(plaintext_result)
-        if plaintext_inputs_exhausted:
-            print(f"Ciphertexts and plaintexts of epoch {self._epoch} exhausted! Resetting iterators!")
-            # All inputs exhausted: Increase epoch, re-initialize datasets and therefore begin 
-            # iteration from the start.
-            self._epoch += 1
-            self._initialize_datasets()
+            
+            if plaintext_inputs_exhausted:
+                print(f"CipherStatisticsDataset: Ciphertexts and plaintexts of epoch {self._epoch} exhausted! Resetting iterators!")
+                # All inputs exhausted: Increase epoch, re-initialize datasets and therefore begin 
+                # iteration from the start.
+                self._epoch += 1
+                self._initialize_datasets()
         
-        return result
+        return self._wait_for_results()
 
-    def _perform_concurrent(self, worker, *, dataset):
+    def _dispatch_concurrent(self, worker, *, dataset):
         error_callback = lambda error: print(f"ERROR in ParallelIterator: {error}")
 
-        async_results = []
+        # Queue `_dataset_workers * 2` processes, to ensure that the next `TrainingBatch`es 
+        # are prepared while the models in `train.py` are trained. This ensures that the
+        # wait times for each iteration of the dataset are shorter then if we only start 
+        # preprocessing at the begining of __next__ calls.
+        # (Since the pool is initialized with `_dataset_workers`, the number of processes is
+        # still kept at `_dataset_workers`.)
+        processes_to_start = self._dataset_workers * 2 - len(self._processing_queue)
         inputs_exhaused = False
 
-        for _ in range(self._dataset_workers):
+        for _ in range(processes_to_start):
             try:
                 input_batch = next(dataset)
                 batch = self._pool.apply_async(worker.perform, 
-                                                (input_batch, ),
-                                                error_callback=error_callback)
-                async_results.append(batch)
+                                               (input_batch, ),
+                                               error_callback=error_callback)
+                self._processing_queue.append(batch)
             except StopIteration:
                 inputs_exhaused = True
+                break
+        
+        return inputs_exhaused
 
+    def _wait_for_results(self):
         training_batches = []
-        for result in async_results:
+        for _ in range(self._dataset_workers):
+            try:
+                result = self._processing_queue.popleft()
+            except IndexError:
+                break
             training_batch = result.get()
             self._iteration += len(training_batch)
             training_batches.append(training_batch)
 
-        return inputs_exhaused, training_batches
+        return training_batches
 
 class RotorCiphertextsDatasetParameters:
     """Encapsulates the parameters of `RotorCiphertextsDataset`. These parameters are used

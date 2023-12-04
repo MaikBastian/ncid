@@ -449,33 +449,24 @@ def train_model(model, args, train_ds):
     train_epoch = 0
     val_data = None
     val_labels = None
-    run = None
-    run1 = None
+    training_batches = None
     classes = list(range(len(config.CIPHER_TYPES)))
     new_run = [[], []]
     while train_ds.iteration < args.max_iter:
-        if run1 is None:
-            train_epoch = 0
-            run1 = next(train_ds)
-        if run is None:
-            run = run1
-            if train_ds.iteration < args.max_iter:
-                train_epoch = train_ds.epoch
-                processes = []
-                run1 = next(train_ds)
+        training_batches = next(train_ds)
+
         # use this only with decision trees
         if architecture in ("DT", "RF", "ET"):
-            for statistics, labels in run.tuple():
+            for statistics, labels in training_batches.tuple():
                 new_run[0].extend(statistics.numpy().tolist())
                 new_run[1].extend(labels.numpy().tolist())
             if train_ds.iteration < args.max_iter:
-                run = None
                 print("Loaded %d ciphertexts." % train_ds.iteration)
                 continue
             print("Loaded %d ciphertexts." % train_ds.iteration)
             new_run = [(tf.convert_to_tensor(new_run[0]), tf.convert_to_tensor(new_run[1]))]
-            run = new_run
-        for training_batch in run:
+            training_batches = new_run
+        for training_batch in training_batches:
             statistics, labels = training_batch.tuple()
             cntr += 1
             train_iter = args.train_dataset_size * cntr
@@ -537,8 +528,8 @@ def train_model(model, args, train_ds):
             if train_iter >= args.max_iter or early_stopping_callback.stop_training:
                 break
         if train_ds.iteration >= args.max_iter or early_stopping_callback.stop_training:
+            train_ds.stop_outstanding_tasks()
             break
-        run = None
 
     elapsed_training_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
     training_stats = 'Finished training in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
