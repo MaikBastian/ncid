@@ -31,7 +31,7 @@ import tensorflow_datasets as tfds
 sys.path.append("../")
 import cipherTypeDetection.config as config
 from cipherImplementations.cipher import OUTPUT_ALPHABET
-from cipherTypeDetection.textLine2CipherStatisticsDataset import RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CombinedCipherStatisticsDataset
+from cipherTypeDetection.textLine2CipherStatisticsDataset import RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CipherStatisticsDataset
 from cipherTypeDetection.miniBatchEarlyStoppingCallback import MiniBatchEarlyStopping
 from cipherTypeDetection.transformer import TransformerBlock, TokenAndPositionEmbedding, MultiHeadSelfAttention
 from cipherTypeDetection.learningRateSchedulers import TimeBasedDecayLearningRateScheduler, CustomStepDecayLearningRateScheduler
@@ -400,8 +400,8 @@ def load_datasets_from_disk(args, cipher_types):
                                                             args.train_dataset_size,
                                                             args.dataset_workers)
     
-    train_ds = CombinedCipherStatisticsDataset(train_plaintext_parameters, train_rotor_ciphertexts_parameters)
-    test_ds = CombinedCipherStatisticsDataset(test_plaintext_parameters, test_rotor_ciphertexts_parameters)
+    train_ds = CipherStatisticsDataset(train_plaintext_parameters, train_rotor_ciphertexts_parameters)
+    test_ds = CipherStatisticsDataset(test_plaintext_parameters, test_rotor_ciphertexts_parameters)
 
     if args.train_dataset_size % train_ds.key_lengths_count != 0:
         print("WARNING: the --train_dataset_size parameter must be dividable by the amount of --ciphers  and the length configured "
