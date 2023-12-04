@@ -1432,15 +1432,19 @@ def pad_sequences(sequences, maxlen):
 
 
 class CipherStatisticsDataset:
-    """Base class for cipher statistics datasets. These datasets take some inputs and calculate
-    the statistics for these inputs and return them in batches via their iterator interface."""
+    """Base class for cipher statistics datasets. The concrete dataset subclasses take some inputs
+    (e.g. plaintext files or ciphertexts), do some processing (e.g. filtering of the characters and
+    encryption) and finally calculate the statistics for these inputs. The datasets provide a 
+    iterator interface, that returns the calculated statistics and their labels as 
+    `TrainingBatch`es. The number of training batches that are returned by each iteration depend
+    on `dataset_workers`. The length of the statistics and labels of each `TrainingBatch` match
+    `batch_size`."""
 
-    def __init__(self, iteration, epoch, dataset_workers, batch_size, key_lengths_count):
+    def __init__(self, iteration, epoch, dataset_workers, batch_size):
         self._iteration = iteration
         self._dataset_workers = dataset_workers
         self._epoch = epoch
         self._batch_size = batch_size
-        self._key_lengths_count = key_lengths_count
 
     @property
     def iteration(self):
@@ -1465,11 +1469,10 @@ class CipherStatisticsDataset:
         the length of the returned `TrainingBatch`es of iterator method `__next__`."""
         return self._batch_size
     
-    @property
-    def key_lengths_count(self):
-        return self._key_lengths_count
-    
-class PlaintextDatasetParameters:
+class PlaintextPathsDatasetParameters:
+    """Encapsulates the parameters of `PlaintextPathsDataset`. These parameters are used
+    for the initialization of the dataset itself, as well as for the worker processes and
+    the main statistics dataset."""
 
     def __init__(self, plaintext_paths, cipher_types, batch_size, min_text_len, max_text_len, 
                  keep_unknown_symbols=False, dataset_workers=None,
@@ -1483,7 +1486,10 @@ class PlaintextDatasetParameters:
         self.dataset_workers = dataset_workers
         self.generate_test_data = generate_test_data
 
-class CiphertextDatasetParameters:
+class RotorCiphertextsDatasetParameters:
+    """Encapsulates the parameters of `RotorCiphertextsDataset`. These parameters are used
+    for the initialization of the dataset itself, as well as for the worker processes and
+    the main statistics dataset."""
 
     def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers):
         self.ciphertexts_with_labels = ciphertexts_with_labels
@@ -1505,13 +1511,9 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
 
         batch_size = plaintext_dataset_params.batch_size
 
-        # combined_key_lengths = plaintext_dataset.key_lengths_count + rotor_ciphertext_dataset.key_lengths_count
-        combined_key_lengths = 42
-        super(CombinedCipherStatisticsDataset, self).__init__(iteration=0, 
-                                                              epoch=0, 
-                                                              dataset_workers=plaintext_dataset_params.dataset_workers, 
-                                                              batch_size=batch_size, 
-                                                              key_lengths_count=combined_key_lengths)
+        super().__init__(iteration=0, epoch=0, 
+                         dataset_workers=plaintext_dataset_params.dataset_workers, 
+                         batch_size=batch_size)
         
         self._index = 0
         self._pool = multiprocessing_pool.Pool(self._dataset_workers)
@@ -1533,8 +1535,14 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
                                                         plaintext_params.min_text_len, 
                                                         plaintext_params.max_text_len, 
                                                         plaintext_params.keep_unknown_symbols)
-        self._ciphertext_dataset = RotorCiphertextDataset(ciphertext_params.ciphertexts_with_labels, 
+        self._ciphertext_dataset = RotorCiphertextsDataset(ciphertext_params.ciphertexts_with_labels, 
                                                           self._batch_size)
+        
+    def key_lengths_count(self):
+        """Returns the combined count of all key length values for all supported ciphers
+        of the plaintext path dataset.
+        """
+        return self._plaintext_dataset.key_lengths_count
     
     def __iter__(self):
         return self
@@ -1603,9 +1611,11 @@ class CombinedCipherStatisticsDataset(CipherStatisticsDataset): # TODO: Better n
 
         return inputs_exhaused, training_batches
     
-class RotorCiphertextDataset:
+class RotorCiphertextsDataset:
     """Takes rotor ciphertext (with their labels) as input and returns batched
-    lists of the ciphertext lines (and their labels) as iteration result."""
+    lists of the ciphertext lines (and their labels) as iteration result.
+    The batching allows for splitting the input in workable chunks 
+    (that fit in RAM) and can be distributed to multiple worker processes."""
     def __init__(self, ciphertexts_with_labels, batch_size):
         self._ciphertexts_with_labels = ciphertexts_with_labels
         self._batch_size = batch_size
@@ -1617,7 +1627,6 @@ class RotorCiphertextDataset:
     def __next__(self):
         input_length = len(self._ciphertexts_with_labels)
         if self._index >= input_length:
-            # TODO: Restart intead!?
             raise StopIteration()
 
         end_index = self._index + self._batch_size
@@ -1648,6 +1657,10 @@ class PlaintextPathsDataset:
 
         self._plaintext_dataset = tf.data.TextLineDataset(plaintext_paths)
         self._dataset_iter = self._plaintext_dataset.__iter__()
+    
+    @property
+    def key_lengths_count(self):
+        return self._key_lengths_count
 
     def __iter__(self):
         return self
@@ -1801,6 +1814,7 @@ class PlaintextLine2CipherStatisticsWorker:
 class TrainingBatch:
     """Encapsulates the calculates statistics (features) and their labels
     for inputs."""
+
     def __init__(self, statistics, labels):
         assert len(statistics) == len(labels)
         self.statistics = statistics

@@ -31,7 +31,7 @@ import tensorflow_datasets as tfds
 sys.path.append("../")
 import cipherTypeDetection.config as config
 from cipherImplementations.cipher import OUTPUT_ALPHABET
-from cipherTypeDetection.textLine2CipherStatisticsDataset import CiphertextDatasetParameters, PlaintextDatasetParameters, CombinedCipherStatisticsDataset
+from cipherTypeDetection.textLine2CipherStatisticsDataset import RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CombinedCipherStatisticsDataset
 from cipherTypeDetection.miniBatchEarlyStoppingCallback import MiniBatchEarlyStopping
 from cipherTypeDetection.transformer import TransformerBlock, TokenAndPositionEmbedding, MultiHeadSelfAttention
 from cipherTypeDetection.learningRateSchedulers import TimeBasedDecayLearningRateScheduler, CustomStepDecayLearningRateScheduler
@@ -383,19 +383,19 @@ def load_datasets_from_disk(args, cipher_types):
     train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertexts, test_size=0.05, 
                                                                        random_state=42, shuffle=True)
 
-    train_plaintext_parameters = PlaintextDatasetParameters(train_plaintexts, cipher_types, args.train_dataset_size, 
+    train_plaintext_parameters = PlaintextPathsDatasetParameters(train_plaintexts, cipher_types, args.train_dataset_size, 
                                                 args.min_train_len, args.max_train_len,
                                                 args.keep_unknown_symbols, args.dataset_workers)
-    test_plaintext_parameters = PlaintextDatasetParameters(test_plaintexts, cipher_types, args.train_dataset_size,     
+    test_plaintext_parameters = PlaintextPathsDatasetParameters(test_plaintexts, cipher_types, args.train_dataset_size,     
                                                args.min_test_len, args.max_test_len,
                                                args.keep_unknown_symbols, args.dataset_workers)
     
     # TODO: Move into calling function! (ROTOR_CIPHER_TYPES)
-    train_rotor_ciphertexts_parameters = CiphertextDatasetParameters(train_rotor_ciphertexts, 
+    train_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(train_rotor_ciphertexts, 
                                                             config.ROTOR_CIPHER_TYPES, 
                                                             args.train_dataset_size,
                                                             args.dataset_workers)
-    test_rotor_ciphertexts_parameters = CiphertextDatasetParameters(test_rotor_ciphertexts, 
+    test_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(test_rotor_ciphertexts, 
                                                             config.ROTOR_CIPHER_TYPES,
                                                             args.train_dataset_size,
                                                             args.dataset_workers)
