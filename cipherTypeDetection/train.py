@@ -567,7 +567,14 @@ def save_model(model, args):
         for arg in vars(args):
             f.write("{:23s}= {:s}\n".format(arg, str(getattr(args, arg))))
     if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
-        shutil.move('../data/logs', '../data/' + model_name.split('.')[0] + '_tensorboard_logs')
+        logs_destination = '../data/' + model_name.split('.')[0] + '_tensorboard_logs'
+        try:
+            if os.path.exists(logs_destination):
+                shutil.rmtree(logs_destination)
+            shutil.move('../data/logs', logs_destination)
+        except Exception:
+            print(f"Could not remove logs of previous run. Move of current logs "
+                  f"from '../data/logs' to '{logs_destination}' failed.")
     print('Model saved.\n')
     
 def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter):
