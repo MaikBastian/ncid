@@ -1636,12 +1636,11 @@ class RotorCiphertextsDataset:
         self._ciphertexts_with_labels = ciphertexts_with_labels
         self._batch_size = batch_size
         self._logger = logger
-        # self._min_text_len = min_text_len
-        # self._max_text_len = max_text_len
         self._index = 0
-        self._ciphertexts_with_labels = self._convert_lines_to_length(ciphertexts_with_labels, min_text_len, max_text_len)
+        self._ciphertexts_with_labels = self._convert_lines_to_length(ciphertexts_with_labels, 
+                                                                      max_text_len)
 
-    def _convert_lines_to_length(self, ciphertexts_with_labels, min_length, max_length):
+    def _convert_lines_to_length(self, ciphertexts_with_labels, max_length):
         ciphertexts_with_labels = sorted(ciphertexts_with_labels, key=lambda elem: elem[1])
 
         # Samples stores a long string of all concatenated ciphertexts of the same label.
