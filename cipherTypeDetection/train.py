@@ -394,11 +394,15 @@ def load_datasets_from_disk(args, cipher_types):
     train_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(train_rotor_ciphertexts, 
                                                             config.ROTOR_CIPHER_TYPES, 
                                                             args.train_dataset_size,
-                                                            args.dataset_workers)
+                                                            args.dataset_workers, 
+                                                            args.min_train_len, 
+                                                            args.max_train_len)
     test_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(test_rotor_ciphertexts, 
                                                             config.ROTOR_CIPHER_TYPES,
                                                             args.train_dataset_size,
-                                                            args.dataset_workers)
+                                                            args.dataset_workers, 
+                                                            args.min_test_len, 
+                                                            args.max_test_len)
     
     train_ds = CipherStatisticsDataset(train_plaintext_parameters, train_rotor_ciphertexts_parameters)
     test_ds = CipherStatisticsDataset(test_plaintext_parameters, test_rotor_ciphertexts_parameters)
@@ -601,27 +605,20 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
     cntr = 0
     test_iter = 0
     test_epoch = 0
-    run = None
-    run1 = None
-    processes = []
+
     while test_ds.iteration < args.max_iter:
-        if run1 is None:
-            processes, run1 = test_ds.__next__()
-        if run is None:
-            for process in processes:
-                process.join()
-            run = run1
-            test_ds.iteration += test_ds.batch_size * test_ds.dataset_workers
-            if test_ds.iteration < args.max_iter:
-                processes, run1 = test_ds.__next__()
-        for batch, labels in run:
+        training_batches = next(test_ds)
+
+        for training_batch in training_batches:
+            statistics, labels = training_batch.tuple()
+            
             # Decision Tree, Naive Bayes prediction
             if architecture in ("DT", "NB", "RF", "ET"):
-                prediction = model.predict_proba(batch)
+                prediction = model.predict_proba(statistics)
             elif architecture == "[FFNN,NB]":
-                prediction = model[0].predict(batch, batch_size=args.batch_size, verbose=1)
+                prediction = model[0].predict(statistics, batch_size=args.batch_size, verbose=1)
             else:
-                prediction = model.predict(batch, batch_size=args.batch_size, verbose=1)
+                prediction = model.predict(statistics, batch_size=args.batch_size, verbose=1)
             for i in range(len(prediction)):
                 if labels[i] == np.argmax(prediction[i]):
                     correct_all += 1
@@ -640,10 +637,6 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
                 break
         if test_ds.iteration >= args.max_iter:
             break
-        run = None
-    for process in processes:
-        if process.is_alive():
-            process.terminate()
 
     elapsed_prediction_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
 
