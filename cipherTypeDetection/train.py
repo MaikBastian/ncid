@@ -373,7 +373,7 @@ def load_datasets_from_disk(args, cipher_types):
                     max -= 1
                     if max < 0:
                         break
-                    rotor_ciphertexts.append((line, label))
+                    rotor_ciphertexts.append((line.rstrip(), label))
 
     if len(rotor_ciphertexts) >= args.max_iter * 0.7:
         print("WARNING: A large amount of the training data will only consist of rotor machine ciphertexts!")
