@@ -6,6 +6,7 @@ from cipherImplementations.simpleSubstitution import SimpleSubstitution
 import sys
 from util.utils import map_text_into_numberspace
 import copy
+import random
 import math
 import multiprocessing
 from multiprocessing import pool as multiprocessing_pool
@@ -1476,9 +1477,13 @@ class CipherStatisticsDataset:
                                                         plaintext_params.cipher_types, 
                                                         plaintext_params.min_text_len, 
                                                         plaintext_params.max_text_len, 
-                                                        plaintext_params.keep_unknown_symbols)
+                                                        plaintext_params.keep_unknown_symbols,
+                                                        self._logger)
         self._ciphertext_dataset = RotorCiphertextsDataset(ciphertext_params.ciphertexts_with_labels, 
-                                                          self._batch_size)
+                                                          self._batch_size,
+                                                          ciphertext_params.min_text_len,
+                                                          ciphertext_params.max_text_len,
+                                                          self._logger)
     
     @property
     def iteration(self):
@@ -1595,21 +1600,56 @@ class RotorCiphertextsDatasetParameters:
     for the initialization of the dataset itself, as well as for the worker processes and
     the main statistics dataset."""
 
-    def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers):
+    def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers, min_text_len, max_text_len):
         self.ciphertexts_with_labels = ciphertexts_with_labels
         self.cipher_types = cipher_types
         self.batch_size = batch_size
         self.dataset_workers = dataset_workers
+        self.min_text_len = min_text_len
+        self.max_text_len = max_text_len
     
 class RotorCiphertextsDataset:
     """Takes rotor ciphertext (with their labels) as input and returns batched
     lists of the ciphertext lines (and their labels) as iteration result.
     The batching allows for splitting the input in workable chunks 
     (that fit in RAM) and can be distributed to multiple worker processes."""
-    def __init__(self, ciphertexts_with_labels, batch_size):
+    def __init__(self, ciphertexts_with_labels, batch_size, min_text_len, max_text_len, logger):
         self._ciphertexts_with_labels = ciphertexts_with_labels
         self._batch_size = batch_size
+        self._logger = logger
+        # self._min_text_len = min_text_len
+        # self._max_text_len = max_text_len
         self._index = 0
+        self._ciphertexts_with_labels = self._convert_lines_to_length(ciphertexts_with_labels, min_text_len, max_text_len)
+
+    def _convert_lines_to_length(self, ciphertexts_with_labels, min_length, max_length):
+        ciphertexts_with_labels = sorted(ciphertexts_with_labels, key=lambda elem: elem[1])
+
+        # Samples stores a long string of all concatenated ciphertexts of the same label.
+        # The length of samples is therefore the same as the number of labels (cipher names).
+        samples = []
+        # Memorize labels in the order as they appear in `ciphertexts_with_labels`.
+        labels = []
+
+        # Concatenate all ciphertexts into long samples
+        previous_label = None
+        for ciphertext, label in ciphertexts_with_labels:
+            if label != previous_label:
+                samples.append(ciphertext)
+                labels.append(label)
+                previous_label = label
+            else:
+                samples[-1] = samples[-1] + ciphertext
+        
+        # Split the samples at `max_length` and append them into `results` with their labels
+        results = []
+        for index, sample in enumerate(samples):
+            for splitIndex in range(0, len(sample), max_length):
+                splitted = sample[splitIndex:splitIndex + max_length]
+                results.append((splitted, labels[index]))
+
+        random.shuffle(results)
+        return results
 
     def __iter__(self):
         return self
@@ -1620,7 +1660,9 @@ class RotorCiphertextsDataset:
             raise StopIteration()
 
         end_index = self._index + self._batch_size
-        result = self._ciphertexts_with_labels[self._index:end_index] # TODO: Lines should also be truncated / joined to fit lengths
+        result = self._ciphertexts_with_labels[self._index:end_index] 
+
+        self._logger.info(f"RotorCiphertextDataset: Returning batch {self._index // self._batch_size}")
 
         self._index += self._batch_size
         return result
@@ -1647,11 +1689,12 @@ class PlaintextPathsDataset:
     from the plaintext files."""
 
     def __init__(self, plaintext_paths, batch_size, cipher_types, 
-                 min_text_len, max_text_len, keep_unknown_symbols):
+                 min_text_len, max_text_len, keep_unknown_symbols, logger):
         self._batch_size = batch_size
         self._min_text_len = min_text_len
         self._max_text_len = max_text_len
         self._keep_unknown_symbols = keep_unknown_symbols
+        self._logger = logger
 
         key_lengths_count = 0
         for cipher_t in cipher_types:
@@ -1664,6 +1707,8 @@ class PlaintextPathsDataset:
 
         self._plaintext_dataset = tf.data.TextLineDataset(plaintext_paths)
         self._dataset_iter = self._plaintext_dataset.__iter__()
+
+        self._index = 0
     
     @property
     def key_lengths_count(self):
@@ -1706,6 +1751,9 @@ class PlaintextPathsDataset:
             #     else:
             #         result.append(filtered_data[:len(filtered_data)-(len(filtered_data) % 2)])
         
+        self._logger.info(f"PlaintextPathsDataset: Returning batch {self._index}")
+        self._index += 1
+
         return result
 
 class ConfigParams:
