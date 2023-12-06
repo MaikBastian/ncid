@@ -542,6 +542,8 @@ def train_model(model, args, train_ds):
 def save_model(model, args):
     """Saves the model"""
     print('Saving model...')
+    if not os.path.exists(args.save_directory):
+        os.mkdir(args.save_directory)
     if args.model_name == 'm.h5':
         i = 1
         while os.path.exists(os.path.join(args.save_directory, args.model_name.split('.')[0] + str(i) + '.h5')):
