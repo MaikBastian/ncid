@@ -1821,9 +1821,12 @@ class CiphertextLine2CipherStatisticsWorker:
     def _map_text_into_numberspace(self, text):
         alphabet = "abcdefghijklmnopqrstuvwxyz"
         result = []
-        # TODO: Extend exception with additional information!?
         for index in range(len(text)):
-            result.append(alphabet.index(text[index]))
+            try:
+                result.append(alphabet.index(text[index]))
+            except ValueError:
+                raise Exception(f"Ciphertext contains unknown character '{text[index]}'. "
+                                f"Known characters are: '{alphabet}'.")
         return result
 
 class PlaintextLine2CipherStatisticsWorker:
@@ -1860,7 +1863,8 @@ class PlaintextLine2CipherStatisticsWorker:
                     try:
                         ciphertext = encrypt(line, index, key_length, self._keep_unknown_symbols)
                     except ValueError:
-                        # TODO: Log message!
+                        print(f"Could not encrypt line with cipher '{cipher_type}' "
+                              f"and key length {key_length}. Skipping line ...")
                         continue
                     if config.feature_engineering:
                         statistics = calculate_statistics(ciphertext)
@@ -1889,7 +1893,9 @@ class TrainingBatch:
         return len(self.statistics)
     
     def append(self, entry):
-        # TODO: Validate entry is tuple and has to non-empty values
+        if not isinstance(entry, tuple) and len(entry) != 2:
+            raise Exception("Only allowed to append tuples with statistics and "
+                            "corresponding label to TrainingBatch.")
         self.statistics.append(entry[0])
         self.labels.append(entry[1])
     
