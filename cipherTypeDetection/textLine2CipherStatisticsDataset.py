@@ -1759,16 +1759,6 @@ class PlaintextPathsDataset:
                 result.append(filtered_data[:self._max_text_len-(self._max_text_len % 2)])
             else:
                 result.append(filtered_data[:len(filtered_data)-(len(filtered_data) % 2)])
-
-            # except:
-            #     self.__iter__()
-            #     filtered_data = c.filter(self._iter.__next__().numpy(), self._keep_unknown_symbols)
-            #     while len(filtered_data) < self._min_text_len:
-            #         filtered_data += c.filter(self._iter.__next__().numpy(), self._keep_unknown_symbols)
-            #     if len(filtered_data) > self._max_text_len:
-            #         result.append(filtered_data[:self._max_text_len-(self._max_text_len % 2)])
-            #     else:
-            #         result.append(filtered_data[:len(filtered_data)-(len(filtered_data) % 2)])
         
         self._logger.info(f"PlaintextPathsDataset: Returning batch {self._index}")
         self._index += 1
@@ -1861,7 +1851,7 @@ class PlaintextLine2CipherStatisticsWorker:
         for line in plaintexts:
             for cipher_type in self._cipher_types:
                 index = config.cipher_types.index(cipher_type)
-                label = self._cipher_types.index(cipher_type) # TODO: Isn't it just equal to cipher_type!?
+                label = self._cipher_types.index(cipher_type)
                 if isinstance(config.key_lengths[label], list):
                     key_lengths = config.key_lengths[label]
                 else:
