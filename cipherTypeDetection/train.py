@@ -374,9 +374,6 @@ def load_datasets_from_disk(args, cipher_types):
                     if max < 0:
                         break
                     rotor_ciphertexts.append((line.rstrip(), label))
-
-    if len(rotor_ciphertexts) >= args.max_iter * 0.7:
-        print("WARNING: A large amount of the training data will only consist of rotor machine ciphertexts!")
                     
     train_plaintexts, test_plaintexts = train_test_split(plaintext_files, test_size=0.05, 
                                                          random_state=42, shuffle=True)
