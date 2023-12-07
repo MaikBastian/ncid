@@ -32,7 +32,7 @@ import tensorflow_datasets as tfds
 sys.path.append("../")
 import cipherTypeDetection.config as config
 from cipherImplementations.cipher import OUTPUT_ALPHABET
-from cipherTypeDetection.textLine2CipherStatisticsDataset import RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CipherStatisticsDataset
+from cipherTypeDetection.textLine2CipherStatisticsDataset import RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CipherStatisticsDataset, TrainingBatch
 from cipherTypeDetection.miniBatchEarlyStoppingCallback import MiniBatchEarlyStopping
 from cipherTypeDetection.transformer import TransformerBlock, TokenAndPositionEmbedding, MultiHeadSelfAttention
 from cipherTypeDetection.learningRateSchedulers import TimeBasedDecayLearningRateScheduler, CustomStepDecayLearningRateScheduler
