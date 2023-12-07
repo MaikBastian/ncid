@@ -1218,13 +1218,13 @@ def calculate_cipher_sequence_alphabetical(line):
         if char in char_to_int:
             result.append(char_to_int[char])
         else:
-            result.append(-1) # TODO: Correct?
+            result.append(config.UNKNOWN_SYMBOL_NUMBER) # TODO: Correct?
 
     # TODO: Correct solution? Is there something in the paper regarding ciphers of
     #       different lengths?
     missing = feature_length - len(result)
     for i in range(missing):
-        result.append(-1)
+        result.append(config.UNKNOWN_SYMBOL_NUMBER)
     return result
 
 
@@ -1291,7 +1291,7 @@ def calculate_digrams(line):
     return [item[1] for item in sorted_items]
 
 def calculate_cipher_sequence(line):
-    feature_length = 1000 # TODO: Use max_train_len
+    feature_length = 100 # TODO: Use max_train_len
     result = []
     line = line[:feature_length]
 
@@ -1299,13 +1299,13 @@ def calculate_cipher_sequence(line):
         if 0 <= char <26:
             result.append(char)
         else:
-            result.append(-1) # TODO: Correct?
+            result.append(config.UNKNOWN_SYMBOL_NUMBER)
 
     # TODO: Correct solution? Is there something in the paper regarding ciphers of
     #       different lengths?
     missing = feature_length - len(result)
     for i in range(missing):
-        result.append(-1)
+        result.append(config.UNKNOWN_SYMBOL_NUMBER)
 
     return result
 
@@ -1787,7 +1787,8 @@ class CiphertextLine2CipherStatisticsWorker:
     input. Therefore the output of the __next__ method will return lists of length 
     `dataset_workers`."""
 
-    def __init__(self, config_params):
+    def __init__(self, max_text_len, config_params):
+        self._max_text_len = max_text_len
         self._config_params = config_params
 
     def perform(self, ciphertexts_with_labels):
@@ -1799,16 +1800,15 @@ class CiphertextLine2CipherStatisticsWorker:
         for ciphertext_line, label in ciphertexts_with_labels:
             processed_line = self._preprocess_ciphertext_line(ciphertext_line)
             label_index = config.cipher_types.index(label)
+            labels.append(label_index)
             if config.feature_engineering:
                 feature = calculate_statistics(processed_line)
                 features.append(feature)
-                labels.append(label_index)
             else:
                 features.append(processed_line)
             
         if config.pad_input:
-            # TODO: Fix!
-            features = pad_sequences(features, maxlen=self.max_text_len)
+            features = pad_sequences(features, maxlen=self._max_text_len)
             features = features.reshape(features.shape[0], features.shape[1], 1)
         return TrainingBatch("rotor", tf.convert_to_tensor(features), tf.convert_to_tensor(labels))
     
@@ -1901,8 +1901,14 @@ class TrainingBatch:
     def extend(self, other):
         if not isinstance(other, TrainingBatch):
             raise Exception("Can only extend TrainingBatch with other TrainingBatch instances")
-        self.statistics = tf.concat([self.statistics, other.statistics], 0)
-        self.labels = tf.concat([self.labels, other.labels], 0)
+        if len(self.statistics) == 0:
+            self.statistics = other.statistics
+        else:
+            self.statistics = tf.concat([self.statistics, other.statistics], 0)
+        if len(self.labels) == 0:
+            self.labels = other.labels
+        else:
+            self.labels = tf.concat([self.labels, other.labels], 0)
 
     def tuple(self):
         return (self.statistics, self.labels)

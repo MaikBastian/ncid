@@ -72,7 +72,7 @@ def create_model(extend_model, cipher_types):
     # total_ny_gram_frequencies_size = int(math.pow(len(OUTPUT_ALPHABET), 2)) * 6
 
     # old feature length: 1505
-    rotor_features = 1702
+    rotor_features = 802
     magic = 5
 
     input_layer_size = 18 + total_frequencies_size + rotor_features + magic
@@ -455,21 +455,20 @@ def train_model(model, args, train_ds):
     val_labels = None
     training_batches = None
     classes = list(range(len(config.CIPHER_TYPES)))
-    new_run = [[], []]
     while train_ds.iteration < args.max_iter:
         training_batches = next(train_ds)
 
         # use this only with decision trees
         if architecture in ("DT", "RF", "ET"):
-            for statistics, labels in training_batches.tuple():
-                new_run[0].extend(statistics.numpy().tolist())
-                new_run[1].extend(labels.numpy().tolist())
+            combined_batch = TrainingBatch("mixed", tf.convert_to_tensor([]), tf.convert_to_tensor([]))
+            for training_batch in training_batches:
+                combined_batch.extend(training_batch)
             if train_ds.iteration < args.max_iter:
                 print("Loaded %d ciphertexts." % train_ds.iteration)
                 continue
             print("Loaded %d ciphertexts." % train_ds.iteration)
-            new_run = [(tf.convert_to_tensor(new_run[0]), tf.convert_to_tensor(new_run[1]))]
-            training_batches = new_run
+            training_batches = [combined_batch]
+
         for training_batch in training_batches:
             statistics, labels = training_batch.tuple()
             cntr += 1
@@ -1053,7 +1052,7 @@ if __name__ == "__main__":
         architecture = args.architecture
         cipher_types = args.ciphers.split(',')
 
-        if architecture in ("LSTM", "FFNN"):
+        if architecture in ("LSTM", "FFNN", "CNN", "RF", "ET", "DT", "NB", "Transformer", "[FFNN,NB]"):
             aca_pipeline(cipher_types)
         elif architecture in ("SVM-Rotor", "kNN-Rotor", "RF-Rotor"):
             rotor_pipeline()
