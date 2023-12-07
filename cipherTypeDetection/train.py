@@ -1,3 +1,4 @@
+import multiprocessing
 from pathlib import Path
 
 import numpy as np
@@ -1026,6 +1027,9 @@ def features_from_prediction(prediction, cipher_types):
                 "max_probability": max_probability, "index_of_max_prediction": max_prediction_index}
 
 if __name__ == "__main__":
+    # Don't fork processes to keep memory footprint low. 
+    multiprocessing.set_start_method("spawn")
+
     args = parse_arguments()
 
     cpu_count = os.cpu_count()
