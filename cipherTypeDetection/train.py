@@ -461,7 +461,6 @@ def train_model(model, args, train_ds):
     # time_based_decay_lrate_callback = TimeBasedDecayLearningRateScheduler(args.train_dataset_size)
     custom_step_decay_lrate_callback = CustomStepDecayLearningRateScheduler(early_stopping_callback)
     start_time = time.time()
-    cntr = 0
     train_iter = 0
     train_epoch = 0
     val_data = None
@@ -482,22 +481,24 @@ def train_model(model, args, train_ds):
             print("Loaded %d ciphertexts." % train_ds.iteration)
             training_batches = [combined_batch]
 
-        for training_batch in training_batches:
+        for index, training_batch in enumerate(training_batches):
             statistics, labels = training_batch.tuple()
-            cntr += 1
-            train_iter = args.train_dataset_size * cntr
-            if cntr == 1:
-                statistics, val_data, labels, val_labels = train_test_split(statistics.numpy(), labels.numpy(), 
-                                                                       test_size=0.1)
+            train_iter = train_ds.iteration - len(training_batch) * (len(training_batches) - index - 1)
+
+            # Create small validation dataset on first iteration
+            if index == 0:
+                statistics, val_data, labels, val_labels = train_test_split(statistics.numpy(), 
+                                                                            labels.numpy(), 
+                                                                            test_size=0.3)
                 statistics = tf.convert_to_tensor(statistics)
                 val_data = tf.convert_to_tensor(val_data)
                 labels = tf.convert_to_tensor(labels)
                 val_labels = tf.convert_to_tensor(val_labels)
-            train_iter -= args.train_dataset_size * 0.1
+            train_iter -= len(training_batch) * 0.3
 
             # Decision Tree training
             if architecture in ("DT", "RF", "ET"):
-                train_iter = len(labels) * 0.9
+                train_iter = len(labels) * 0.7
                 print("Start training the decision tree.")
                 history = model.fit(statistics, labels, sample_weight=sample_weights(labels))
                 if architecture == "DT":
@@ -542,11 +543,13 @@ def train_model(model, args, train_ds):
                 train_score = model[1].score(statistics, labels)
                 print("train accuracy: %f, validation accuracy: %f" % (train_score, val_score))
 
-            if train_epoch > 0:
-                train_epoch = train_iter // ((train_ds.iteration + train_ds.batch_size * train_ds.dataset_workers) // train_ds.epoch)
+            if train_ds.epoch > 0:
+                train_epoch = train_ds.iteration // ((train_iter + train_ds.batch_size * train_ds.dataset_workers) // train_ds.epoch)
+                
             print("Epoch: %d, Iteration: %d" % (train_epoch, train_iter))
             if train_iter >= args.max_iter or early_stopping_callback.stop_training:
                 break
+            
         if train_ds.iteration >= args.max_iter or early_stopping_callback.stop_training:
             train_ds.stop_outstanding_tasks()
             break
