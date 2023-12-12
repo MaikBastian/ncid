@@ -1285,7 +1285,7 @@ def calculate_digrams(line):
 
     for digram, count in counted_digrams.items():
         if digram in all_digram_counts:
-            all_digram_counts[digram] = float(count) # TODO: Re-train models and use int
+            all_digram_counts[digram] = count
 
     sorted_items = list(sorted(all_digram_counts.items()))
     return [item[1] for item in sorted_items]
@@ -1531,19 +1531,18 @@ class CipherStatisticsDataset:
         if self._epoch == 0:
             self._epoch = 1
 
-        # If it is the first iteration train.py will use some entries of the training
-        # batches for validation
-        needs_both_cipher_types = self._iteration == 0
-
         ciphertext_inputs_exhausted = False
         plaintext_inputs_exhausted = False
 
         # process rotor cipher datasets
-        ciphertext_worker = CiphertextLine2CipherStatisticsWorker(config_params)
-        plaintext_worker = PlaintextLine2CipherStatisticsWorker(self._plaintext_dataset_params.cipher_types, 
-                                                          self._plaintext_dataset_params.max_text_len, 
-                                                          self._plaintext_dataset_params.keep_unknown_symbols,
-                                                          config_params)
+        ciphertext_worker = CiphertextLine2CipherStatisticsWorker(
+            self._rotor_ciphertext_dataset_params.max_text_len, 
+            config_params)
+        plaintext_worker = PlaintextLine2CipherStatisticsWorker(
+            self._plaintext_dataset_params.cipher_types, 
+            self._plaintext_dataset_params.max_text_len, 
+            self._plaintext_dataset_params.keep_unknown_symbols,
+            config_params)
 
 
         # Process both kinds of ciphers at once.
@@ -1553,16 +1552,12 @@ class CipherStatisticsDataset:
         # preprocessing at the begining of __next__ calls.
         # (Since the pool is initialized with `_dataset_workers`, the number of processes is
         # still kept at `_dataset_workers`.)
-        ciphertext_inputs_exhausted = self._dispatch_concurrent(
-            ciphertext_worker, 
-            processes=self._dataset_workers, 
-            dataset=self._ciphertext_dataset)
-        plaintext_inputs_exhausted = self._dispatch_concurrent(
-            plaintext_worker, 
-            processes=self._dataset_workers if not ciphertext_inputs_exhausted else self._dataset_workers * 2, 
-            dataset=self._plaintext_dataset)
+        ciphertext_inputs_exhausted, plaintext_inputs_exhausted = self._dispatch_concurrent(
+            ciphertext_worker=ciphertext_worker, ciphertext_dataset=self._ciphertext_dataset, 
+            plaintext_worker=plaintext_worker, plaintext_dataset=self._plaintext_dataset,
+            number_of_processes=self._dataset_workers * 2)
         
-        if ciphertext_inputs_exhausted and plaintext_inputs_exhausted:
+        if ciphertext_inputs_exhausted or plaintext_inputs_exhausted:
             print(f"CipherStatisticsDataset: Ciphertexts and plaintexts of epoch {self._epoch} exhausted! Resetting iterators!")
             # All inputs exhausted: Increase epoch, re-initialize datasets and therefore begin 
             # iteration from the start.
@@ -1571,36 +1566,46 @@ class CipherStatisticsDataset:
 
         all_results = self._wait_for_results()
 
-        while needs_both_cipher_types and TrainingBatch.represent_equal_cipher_type(all_results):
+        # Wait until the workers of both cipher types have finished
+        while TrainingBatch.represent_equal_cipher_type(all_results):
             assert len(self._processing_queue) > 0, "Expected different cipher type in queue!"
             next_results = self._wait_for_results()
             all_results.extend(next_results)
 
-        if not ciphertext_inputs_exhausted:
-            # Shuffle ACA and rotor cipher training batches. Each batch should contain some 
-            # statistics and labels of both.
-            return TrainingBatch.shuffle(all_results)
-        else:
-            # No need to shuffle if results only contain a single type of training batch
-            return all_results
+        # Combine ACA and rotor cipher training batches. Each batch should contain some 
+        # statistics and labels of both.
+        return [TrainingBatch.combined(pair) for pair in TrainingBatch.paired_cipher_types(all_results)] 
 
-    def _dispatch_concurrent(self, worker, *, processes, dataset):
+    def _dispatch_concurrent(self, *, ciphertext_worker, ciphertext_dataset, plaintext_worker, 
+                             plaintext_dataset, number_of_processes):
         error_callback = lambda error: print(f"ERROR in ParallelIterator: {error}")
 
-        inputs_exhaused = False
+        ciphertext_inputs_exhausted = False
+        plaintext_inputs_exhausted = False
 
-        for _ in range(processes):
-            try:
-                input_batch = next(dataset)
-                batch = self._pool.apply_async(worker.perform, 
-                                               (input_batch, ),
-                                               error_callback=error_callback)
-                self._processing_queue.append(batch)
-            except StopIteration:
-                inputs_exhaused = True
-                break
+        for index in range(number_of_processes):
+            # start rotor and plaintext worker alternatly after one another
+            if index % 2 == 0:
+                try:
+                    worker = ciphertext_worker
+                    input_batch = next(ciphertext_dataset)
+                except StopIteration:
+                    ciphertext_inputs_exhausted = True
+                    continue
+            else:
+                try:
+                    worker = plaintext_worker
+                    input_batch = next(plaintext_dataset)
+                except StopIteration:
+                    plaintext_inputs_exhausted = True
+                    continue
+
+            batch = self._pool.apply_async(worker.perform, 
+                                            (input_batch, ),
+                                            error_callback=error_callback)
+            self._processing_queue.append(batch)
         
-        return inputs_exhaused
+        return (ciphertext_inputs_exhausted, plaintext_inputs_exhausted)
 
     def _wait_for_results(self):
         training_batches = []
@@ -1638,8 +1643,9 @@ class RotorCiphertextsDataset:
         self._batch_size = batch_size
         self._logger = logger
         self._index = 0
+        max_line_length = min(100, max_text_len) # limit max length to 100 to not exhaust inputs too fast
         self._ciphertexts_with_labels = self._convert_lines_to_length(ciphertexts_with_labels, 
-                                                                      max_text_len)
+                                                                      max_line_length)
 
     def _convert_lines_to_length(self, ciphertexts_with_labels, max_length):
         ciphertexts_with_labels = sorted(ciphertexts_with_labels, key=lambda elem: elem[1])
@@ -1743,7 +1749,6 @@ class PlaintextPathsDataset:
         result = []
         number_of_lines = self._batch_size // self._key_lengths_count
         if number_of_lines == 0:
-            # TODO: Also warn in train.py!
             print(f"ERROR: Batch size is too small to calculate the features for all cipher and key"
                   f"length combinations! Current batch size: {self._batch_size}. Minimum batch size: "
                   f"{self._key_lengths_count}.")
@@ -1877,6 +1882,7 @@ class PlaintextLine2CipherStatisticsWorker:
             batch = pad_sequences(batch, maxlen=self._max_text_len)
             batch = batch.reshape(batch.shape[0], batch.shape[1], 1)
 
+        # multiprocessing_logger.info(f"Batch: '{batch}'; labels: '{labels}'.")
         return TrainingBatch("aca", tf.convert_to_tensor(batch), tf.convert_to_tensor(labels))
 
 class TrainingBatch:
@@ -1884,10 +1890,17 @@ class TrainingBatch:
     for inputs."""
 
     def __init__(self, cipher_type, statistics, labels):
-        assert len(statistics) == len(labels)
+        assert len(statistics) == len(labels), "Number of statistics (features) and labels must match!"
+
         self.cipher_type = cipher_type
-        self.statistics = statistics
-        self.labels = labels
+        if isinstance(statistics, tf.Tensor):
+            self.statistics = statistics
+        else:
+            self.statistics = tf.convert_to_tensor(statistics)
+        if isinstance(labels, tf.Tensor):
+            self.labels = labels
+        else:
+            self.labels = tf.convert_to_tensor(labels)
 
     def __len__(self):
         return len(self.statistics)
@@ -1926,17 +1939,49 @@ class TrainingBatch:
         return True
 
     @staticmethod
-    def shuffle(training_batches):
+    def shuffled(training_batches):
         """Takes a list of `TrainingBatch`es and mixes the entries. Returns the same number
-        of batches with the same sizes, just with some elements swapped."""
+        of batches with the elements distibuted equally."""
         length = len(training_batches)
         result = [TrainingBatch("mixed", [], []) for _ in range(length)]
+
         for training_batch in training_batches:    
             for index in range(len(training_batch)):
                 statistic = training_batch.statistics[index]
                 label = training_batch.labels[index]
                 result[index % length].append((statistic, label))
+
+        # convert lists back to tensors
         for training_batch in result:
             training_batch.statistics = tf.convert_to_tensor(training_batch.statistics)
             training_batch.labels = tf.convert_to_tensor(training_batch.labels)
+
+        return result
+    
+    @staticmethod
+    def combined(training_batches):
+        """Takes lists of `TrainingBatch`es and combines them into one large `TrainingBatch`."""
+        result = TrainingBatch("mixed", [], [])
+
+        for training_batch in training_batches:
+            result.extend(training_batch)
+
+        # convert lists back to tensors
+        result.statistics = tf.convert_to_tensor(result.statistics)
+        result.labels = tf.convert_to_tensor(result.labels)
+
+        return result
+
+    @staticmethod
+    def paired_cipher_types(training_batches):
+        """Takes a list of `TrainingBatch`es and pairs batches with aca ciphers and
+        rotor ciphers. The resulting list therefore contains lists with two elements each."""
+        result = []
+
+        aca_batches = filter(lambda batch: batch.cipher_type == "aca", training_batches)
+        rotor_batches = filter(lambda batch: batch.cipher_type == "rotor", training_batches)
+
+        for aca_batch, rotor_batch in zip(aca_batches, rotor_batches):
+            result.append([aca_batch, rotor_batch])
+
         return result
