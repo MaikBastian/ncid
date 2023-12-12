@@ -444,6 +444,16 @@ def create_model_for_hardware_config(extend_model, cipher_types):
     
 def train_model(model, args, train_ds):
     """Trains the model"""
+
+    def sample_weights(class_labels):
+        """Rotor ciphers will get a weight of 2, aca ciphers the default 1. Since the training
+        dataset for rotor ciphers has less entries, this instructs the ML algorithms to remember
+        them more."""
+        weights = np.ones(len(class_labels))
+        first_rotor_cipher_class = len(config.CIPHER_TYPES) - len(config.ROTOR_CIPHER_TYPES)
+        weights[np.where(class_labels.numpy() > first_rotor_cipher_class)] = 2
+        return weights
+
     print('Training model...')
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir='../data/logs', update_freq='epoch')
     early_stopping_callback = MiniBatchEarlyStopping(
@@ -489,7 +499,7 @@ def train_model(model, args, train_ds):
             if architecture in ("DT", "RF", "ET"):
                 train_iter = len(labels) * 0.9
                 print("Start training the decision tree.")
-                history = model.fit(statistics, labels)
+                history = model.fit(statistics, labels, sample_weight=sample_weights(labels))
                 if architecture == "DT":
                     plt.gcf().set_size_inches(25, 25 / math.sqrt(2))
                     print("Plotting tree.")
@@ -499,20 +509,24 @@ def train_model(model, args, train_ds):
 
             # Naive Bayes training
             elif architecture == "NB":
-                history = model.partial_fit(statistics, labels, classes=classes)
+                history = model.partial_fit(statistics, labels, classes=classes,
+                                            sample_weight=sample_weights(labels))
 
             # FFNN, NB
             elif architecture == "[FFNN,NB]":
                 history = model[0].fit(statistics, labels, batch_size=args.batch_size, 
                                        validation_data=(val_data, val_labels), epochs=args.epochs,
+                                       sample_weight=sample_weights(labels),
                                        callbacks=[early_stopping_callback, tensorboard_callback,    
                                                   custom_step_decay_lrate_callback])
                 # time_based_decay_lrate_callback.iteration = train_iter
-                history = model[1].partial_fit(statistics, labels, classes=classes)
+                history = model[1].partial_fit(statistics, labels, classes=classes, 
+                                               sample_weight=sample_weights(labels))
 
             else:
                 history = model.fit(statistics, labels, batch_size=args.batch_size, 
                                     validation_data=(val_data, val_labels), epochs=args.epochs,
+                                    sample_weight=sample_weights(labels),
                                     callbacks=[early_stopping_callback, tensorboard_callback, 
                                                custom_step_decay_lrate_callback])
                 # time_based_decay_lrate_callback.iteration = train_iter
