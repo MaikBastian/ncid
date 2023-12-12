@@ -1450,16 +1450,15 @@ class CipherStatisticsDataset:
     """
 
     def __init__(self, plaintext_dataset_params, rotor_ciphertext_dataset_params):
-        assert plaintext_dataset_params.batch_size == rotor_ciphertext_dataset_params.batch_size
         assert plaintext_dataset_params.dataset_workers == rotor_ciphertext_dataset_params.dataset_workers
 
-        batch_size = plaintext_dataset_params.batch_size
         dataset_workers = plaintext_dataset_params.dataset_workers
 
         self._iteration = 0
         self._epoch = 0
         self._dataset_workers = dataset_workers
-        self._batch_size = batch_size
+        self._plaintext_batch_size = plaintext_dataset_params.batch_size
+        self._rotor_batch_size = rotor_ciphertext_dataset_params.batch_size
         
         self._pool = multiprocessing_pool.Pool(self._dataset_workers)
         # double ended queue for storing asynchronously processing functions
@@ -1475,14 +1474,14 @@ class CipherStatisticsDataset:
         plaintext_params = self._plaintext_dataset_params
         ciphertext_params = self._rotor_ciphertext_dataset_params
         self._plaintext_dataset = PlaintextPathsDataset(plaintext_params.plaintext_paths, 
-                                                        plaintext_params.batch_size, 
+                                                        self._plaintext_batch_size , 
                                                         plaintext_params.cipher_types, 
                                                         plaintext_params.min_text_len, 
                                                         plaintext_params.max_text_len, 
                                                         plaintext_params.keep_unknown_symbols,
                                                         self._logger)
         self._ciphertext_dataset = RotorCiphertextsDataset(ciphertext_params.ciphertexts_with_labels, 
-                                                          self._batch_size,
+                                                          self._rotor_batch_size,
                                                           ciphertext_params.min_text_len,
                                                           ciphertext_params.max_text_len,
                                                           self._logger)
@@ -1508,7 +1507,7 @@ class CipherStatisticsDataset:
     def batch_size(self):
         """The amount of input lines each worker process will process. This property influences
         the length of the returned `TrainingBatch`es of iterator method `__next__`."""
-        return self._batch_size
+        return self._plaintext_batch_size + self._rotor_batch_size
     
     @property
     def key_lengths_count(self):
