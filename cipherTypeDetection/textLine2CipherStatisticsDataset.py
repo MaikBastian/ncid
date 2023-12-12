@@ -1432,6 +1432,8 @@ def pad_sequences(sequences, maxlen):
     return np.array(ret_sequences)
 
 
+multiprocessing_logger = multiprocessing.log_to_stderr(logging.INFO) # TODO: Use get_logger instead!?
+
 class CipherStatisticsDataset:
     """This classes takes inputs for the composed `PlaintextPathsDataset` and 
     `RotorCiphertextsDataset`, does some processing (e.g. filtering of the characters and
@@ -1462,7 +1464,7 @@ class CipherStatisticsDataset:
         self._pool = multiprocessing_pool.Pool(self._dataset_workers)
         # double ended queue for storing asynchronously processing functions
         self._processing_queue = deque() 
-        self._logger = multiprocessing.log_to_stderr(logging.INFO) # TODO: Use get_logger instead!?
+        self._logger = multiprocessing_logger
 
         self._plaintext_dataset_params = plaintext_dataset_params
         self._rotor_ciphertext_dataset_params = rotor_ciphertext_dataset_params
