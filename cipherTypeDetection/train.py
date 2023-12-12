@@ -467,13 +467,13 @@ def train_model(model, args, train_ds):
     val_data = None
     val_labels = None
     training_batches = None
+    combined_batch = TrainingBatch("mixed", [], [])
     classes = list(range(len(config.CIPHER_TYPES)))
     while train_ds.iteration < args.max_iter:
         training_batches = next(train_ds)
 
-        # use this only with decision trees
+        # DTs, RFs and ETs only support one fit call: Sample all batches into one large batch.
         if architecture in ("DT", "RF", "ET"):
-            combined_batch = TrainingBatch("mixed", tf.convert_to_tensor([]), tf.convert_to_tensor([]))
             for training_batch in training_batches:
                 combined_batch.extend(training_batch)
             if train_ds.iteration < args.max_iter:
