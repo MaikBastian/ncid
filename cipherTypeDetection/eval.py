@@ -17,7 +17,7 @@ sys.path.append("../")
 from util.utils import map_text_into_numberspace
 from util.utils import print_progress
 import cipherTypeDetection.config as config
-from cipherTypeDetection.textLine2CipherStatisticsDataset import PlaintextLine2CipherStatisticsWorker, calculate_statistics, pad_sequences
+from cipherTypeDetection.textLine2CipherStatisticsDataset import CipherStatisticsDataset, PlaintextPathsDatasetParameters, RotorCiphertextsDatasetParameters, calculate_statistics, pad_sequences
 from cipherTypeDetection.ensembleModel import EnsembleModel
 from cipherTypeDetection.transformer import MultiHeadSelfAttention, TransformerBlock, TokenAndPositionEmbedding
 from util.utils import get_model_input_length
@@ -64,14 +64,51 @@ def benchmark(args_, model_):
         print("Datasets Downloaded.")
 
     print("Loading Datasets...")
+    def validate_ciphertext_path(ciphertext_path, cipher_types):
+        file_name = Path(ciphertext_path).stem.lower()
+        if not file_name in cipher_types:
+            raise Exception(f"Filename must equal one of the expected cipher types. Expected cipher types are: {cipher_types}. Current filename is '{file_name}'.")
+        
     plaintext_files = []
     dir_nam = os.listdir(args_.plaintext_folder)
     for name in dir_nam:
         path = os.path.join(args_.plaintext_folder, name)
         if os.path.isfile(path):
             plaintext_files.append(path)
-    dataset = TextLine2CipherStatisticsDataset(plaintext_files, cipher_types, args_.dataset_size, args_.min_text_len, args_.max_text_len,
-                                               args_.keep_unknown_symbols, args_.dataset_workers, generate_test_data=True)
+
+    rotor_cipher_dir = args_.rotor_ciphertext_folder
+    rotor_ciphertexts = []
+    dir_name = os.listdir(rotor_cipher_dir)
+    for name in dir_name:
+        path = os.path.join(rotor_cipher_dir, name)
+        validate_ciphertext_path(path, config.ROTOR_CIPHER_TYPES)
+        if os.path.isfile(path):
+            with open(path, "r") as f:
+                label = Path(path).stem.lower()
+                lines = f.readlines()
+                for line in lines:
+                    rotor_ciphertexts.append((line.rstrip(), label))
+    
+    rotor_dataset_size = (args_.dataset_size // len(config.CIPHER_TYPES)) * 4
+
+    plaintext_dataset_params = PlaintextPathsDatasetParameters(plaintext_files, 
+                                                               cipher_types, 
+                                                               args_.dataset_size, 
+                                                               args_.min_text_len, 
+                                                               args_.max_text_len,
+                                                               args_.keep_unknown_symbols, 
+                                                               args_.dataset_workers, 
+                                                               generate_test_data=True)
+    rotor_dataset_params = RotorCiphertextsDatasetParameters(rotor_ciphertexts, 
+                                                            config.ROTOR_CIPHER_TYPES, 
+                                                            rotor_dataset_size,
+                                                            args_.dataset_workers, 
+                                                            args_.min_text_len, 
+                                                            args_.max_text_len,
+                                                            generate_test_data=True)
+    dataset = CipherStatisticsDataset(plaintext_dataset_params, rotor_dataset_params, 
+                                      generate_test_data=True)
+
     if args_.dataset_size % dataset.key_lengths_count != 0:
         print("WARNING: the --dataset_size parameter must be dividable by the amount of --ciphers  and the length configured KEY_LENGTHS in"
               " config.py. The current key_lengths_count is %d" % dataset.key_lengths_count, file=sys.stderr)
@@ -80,51 +117,35 @@ def benchmark(args_, model_):
     print('Evaluating model...')
     import time
     start_time = time.time()
-    cntr = 0
     iteration = 0
     epoch = 0
     results = []
-    run = None
-    run1 = None
-    ciphertexts = None
-    ciphertexts1 = None
-    processes = []
     while dataset.iteration < args_.max_iter:
-        if run1 is None:
-            epoch = 0
-            processes, run1, ciphertexts1 = dataset.__next__()
-        if run is None:
-            for process in processes:
-                process.join()
-            run = run1
-            ciphertexts = ciphertexts1
-            dataset.iteration += dataset.batch_size * dataset.dataset_workers
-            if dataset.iteration < args_.max_iter:
-                epoch = dataset.epoch
-                processes, run1, ciphertexts1 = dataset.__next__()
-        for j in range(len(run)):
-            batch, labels = run[j]
-            batch = tf.convert_to_tensor(batch)
-            labels = tf.convert_to_tensor(labels)
-            batch_ciphertexts = tf.convert_to_tensor(ciphertexts[j])
+        batches = next(dataset)
+        
+        for index, batch in enumerate(batches):
+            statistics, labels, ciphertexts = batch.tuple()
+            # statistics = tf.convert_to_tensor(statistics)
+            # labels = tf.convert_to_tensor(labels)
+            # batch_ciphertexts = tf.convert_to_tensor(ciphertexts[j])
             if architecture == "FFNN":
-                results.append(model_.evaluate(batch, labels, batch_size=args_.batch_size, verbose=1))
+                results.append(model_.evaluate(statistics, labels, batch_size=args_.batch_size, verbose=1))
             if architecture in ("CNN", "LSTM", "Transformer"):
-                results.append(model_.evaluate(batch_ciphertexts, labels, batch_size=args_.batch_size, verbose=1))
+                results.append(model_.evaluate(ciphertexts, labels, batch_size=args_.batch_size, verbose=1))
             elif architecture in ("DT", "NB", "RF", "ET"):
-                results.append(model_.score(batch, labels))
+                results.append(model_.score(statistics, labels))
                 print("accuracy: %f" % (results[-1]))
             elif architecture == "Ensemble":
-                results.append(model_.evaluate(batch, batch_ciphertexts, labels, args_.batch_size, verbose=1))
-            cntr += 1
-            iteration = args_.dataset_size * cntr
+                results.append(model_.evaluate(statistics, ciphertexts, labels, args_.batch_size, verbose=1))
+
+            iteration = dataset.iteration - len(batch) * (len(batches) - index - 1)
             epoch = dataset.epoch
             if epoch > 0:
                 epoch = iteration // (dataset.iteration // dataset.epoch)
             print("Epoch: %d, Iteration: %d" % (epoch, iteration))
             if iteration >= args_.max_iter:
                 break
-        run = None
+
         if dataset.iteration >= args_.max_iter:
             break
     elapsed_evaluation_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
@@ -455,6 +476,7 @@ if __name__ == "__main__":
     bench_parser.add_argument('--download_dataset', default=True, type=str2bool)
     bench_parser.add_argument('--dataset_workers', default=1, type=int)
     bench_parser.add_argument('--plaintext_folder', default='../data/gutenberg_en', type=str)
+    bench_parser.add_argument('--rotor_ciphertext_folder', default='../data/rotor_ciphertexts', type=str)
     bench_parser.add_argument('--keep_unknown_symbols', default=False, type=str2bool)
     bench_parser.add_argument('--min_text_len', default=50, type=int)
     bench_parser.add_argument('--max_text_len', default=-1, type=int)
