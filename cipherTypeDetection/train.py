@@ -237,8 +237,10 @@ def parse_arguments():
                         help='The number of parallel workers for reading the \ninput files.')
     parser.add_argument('--epochs', default=1, type=int,
                         help='Defines how many times the same data is used to fit the model.')
-    parser.add_argument('--input_directory', default='../data/gutenberg_en', type=str,
-                        help='Input directory of the plaintexts.')
+    parser.add_argument('--plaintext_input_directory', default='../data/gutenberg_en', type=str,
+                        help='Input directory of the plaintexts for training the aca ciphers.')
+    parser.add_argument('--rotor_input_directory', default='../data/rotor_ciphertexts', type=str,
+                        help='Input directory of the rotor ciphertexts.')
     parser.add_argument('--download_dataset', default=True, type=str2bool,
                         help='Download the dataset automatically.')
     parser.add_argument('--save_directory', default='../data/models/',
@@ -300,15 +302,16 @@ def parse_arguments():
 def should_download_datasets(args):
     """Determines if the plaintext datasets should be loaded"""
     return (args.download_dataset and 
-            not os.path.exists(args.input_directory) and 
-            args.input_directory == os.path.abspath('../data/gutenberg_en'))
+            not os.path.exists(args.plaintext_input_directory) and 
+            args.plaintext_input_directory == os.path.abspath('../data/gutenberg_en'))
 
 def download_datasets(args):
-    """Downloads plaintexts and saves them in the input_directory"""
+    """Downloads plaintexts and saves them in the plaintext_input_directory"""
     print("Downloading Datsets...")
+    # TODO: Does not create the directory!
     tfds.download.add_checksums_dir('../data/checksums/')
     download_manager = tfds.download.download_manager.DownloadManager(download_dir='../data/', 
-                                                       extract_dir=args.input_directory)
+                                                       extract_dir=args.plaintext_input_directory)
     data_url = ('https://drive.google.com/uc?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V&export=download' +
         '&confirm=t&uuid=afbc362d-9d52-472a-832b-c2af331a8d5b')
     try:
@@ -321,10 +324,10 @@ def download_datasets(args):
         print(e)
         sys.exit(1)
 
-    path = os.path.join(args.input_directory, 
+    path = os.path.join(args.plaintext_input_directory, 
                         'ZIP.ucid_1bF5sSVjxTx-P5wxn87nxWn_V_export_downloadR9Cwhunev5CvJ-ic__'
                         'HawxhTtGOlSdcCrro4fxfEI8A', 
-                        os.path.basename(args.input_directory))
+                        os.path.basename(args.plaintext_input_directory))
     dir_name = os.listdir(path)
     for name in dir_name:
         p = Path(os.path.join(path, name))
@@ -343,14 +346,10 @@ def load_datasets_from_disk(args, cipher_types):
     """
     print("Loading Datasets...")
     plaintext_files = []
-    dir_name = os.listdir(args.input_directory)
-    max = 400
+    dir_name = os.listdir(args.plaintext_input_directory)
     for name in dir_name:
-        path = os.path.join(args.input_directory, name)
+        path = os.path.join(args.plaintext_input_directory, name)
         if os.path.isfile(path):
-            max -= 1
-            if max == 0:
-                break
             plaintext_files.append(path)
 
     def validate_ciphertext_path(ciphertext_path, cipher_types):
@@ -358,11 +357,9 @@ def load_datasets_from_disk(args, cipher_types):
         if not file_name in cipher_types:
             raise Exception(f"Filename must equal one of the expected cipher types. Expected cipher types are: {cipher_types}. Current filename is '{file_name}'.")
     
-    # TODO: Do not hard code folder!?
-    rotor_cipher_dir = Path(args.input_directory).parent / "rotor_ciphertexts"
+    rotor_cipher_dir = args.rotor_input_directory
     rotor_ciphertexts = []
     dir_name = os.listdir(rotor_cipher_dir)
-    max = 10000
     for name in dir_name:
         path = os.path.join(rotor_cipher_dir, name)
         validate_ciphertext_path(path, config.ROTOR_CIPHER_TYPES)
@@ -371,9 +368,6 @@ def load_datasets_from_disk(args, cipher_types):
                 label = Path(path).stem.lower()
                 lines = f.readlines()
                 for line in lines:
-                    max -= 1
-                    if max < 0:
-                        break
                     rotor_ciphertexts.append((line.rstrip(), label))
                     
     train_plaintexts, test_plaintexts = train_test_split(plaintext_files, test_size=0.05, 
@@ -1072,7 +1066,8 @@ if __name__ == "__main__":
     if create_meta_classifier:
         meta_classifier_pipeline()
     else:
-        args.input_directory = os.path.abspath(args.input_directory)
+        args.plaintext_input_directory = os.path.abspath(args.plaintext_input_directory)
+        args.rotor_input_directory = os.path.abspath(args.rotor_input_directory)
         args.ciphers = args.ciphers.lower()
         architecture = args.architecture
         cipher_types = args.ciphers.split(',')
