@@ -1449,7 +1449,8 @@ class CipherStatisticsDataset:
     the `_processing_queue`.
     """
 
-    def __init__(self, plaintext_dataset_params, rotor_ciphertext_dataset_params):
+    def __init__(self, plaintext_dataset_params, rotor_ciphertext_dataset_params, 
+                 generate_test_data=False):
         assert plaintext_dataset_params.dataset_workers == rotor_ciphertext_dataset_params.dataset_workers
 
         dataset_workers = plaintext_dataset_params.dataset_workers
@@ -1467,6 +1468,8 @@ class CipherStatisticsDataset:
         self._rotor_ciphertext_dataset_params = rotor_ciphertext_dataset_params
 
         self._initialize_datasets()
+
+        self._generate_test_data = generate_test_data
     
     def _initialize_datasets(self):
         self._plaintext_dataset = PlaintextPathsDataset(self._plaintext_dataset_params, 
@@ -1525,43 +1528,50 @@ class CipherStatisticsDataset:
 
         # process rotor cipher datasets
         ciphertext_worker = CiphertextLine2CipherStatisticsWorker(
-            self._rotor_ciphertext_dataset_params, 
-            config_params)
+            self._rotor_ciphertext_dataset_params, config_params)
         plaintext_worker = PlaintextLine2CipherStatisticsWorker(
-            self._plaintext_dataset_params,
-            config_params)
+            self._plaintext_dataset_params, config_params)
 
+        # Number of workers to start to yield a single combined batch of rotor and aca 
+        # ciphers.
+        combined_process_count = self._dataset_workers * 2
 
-        # Process both kinds of ciphers at once.
-        # Queue `_dataset_workers * 2` processes, to ensure that the next `TrainingBatch`es 
-        # are prepared while the models in `train.py` are trained. This ensures that the
-        # wait times for each iteration of the dataset are shorter then if we only start 
-        # preprocessing at the begining of __next__ calls.
+        # Process both kinds of ciphers at once. Queue `combined_process_count * 2` processes, 
+        # to ensure that the next `TrainingBatch`es are prepared while the models in `train.py` 
+        # are trained. This ensures that the wait times for each iteration of the dataset are 
+        # shorter then if we only start preprocessing at the begining of __next__ calls.
         # (Since the pool is initialized with `_dataset_workers`, the number of processes is
         # still kept at `_dataset_workers`.)
         ciphertext_inputs_exhausted, plaintext_inputs_exhausted = self._dispatch_concurrent(
             ciphertext_worker=ciphertext_worker, ciphertext_dataset=self._ciphertext_dataset, 
             plaintext_worker=plaintext_worker, plaintext_dataset=self._plaintext_dataset,
-            number_of_processes=self._dataset_workers * 2)
+            number_of_processes=combined_process_count * 2)
         
+        # Inputs exhausted: Increase epoch, re-initialize datasets and therefore begin 
+        # iteration from the start.
         if ciphertext_inputs_exhausted or plaintext_inputs_exhausted:
             print(f"CipherStatisticsDataset: Ciphertexts and plaintexts of epoch {self._epoch} exhausted! Resetting iterators!")
-            # All inputs exhausted: Increase epoch, re-initialize datasets and therefore begin 
-            # iteration from the start.
             self._epoch += 1
             self._initialize_datasets()
 
-        all_results = self._wait_for_results()
+        # Get all results of this iteration
+        all_results = self._wait_for_results(number_of_processes=combined_process_count)
 
-        # Wait until the workers of both cipher types have finished
+        # Wait until the workers of both cipher types have finished. Otherwise the returned
+        # batch could only contain aca or rotor ciphers. 
         while TrainingBatch.represent_equal_cipher_type(all_results):
             assert len(self._processing_queue) > 0, "Expected different cipher type in queue!"
-            next_results = self._wait_for_results()
+            next_results = self._wait_for_results(number_of_processes=combined_process_count)
             all_results.extend(next_results)
 
         # Combine ACA and rotor cipher training batches. Each batch should contain some 
         # statistics and labels of both.
-        return [TrainingBatch.combined(pair) for pair in TrainingBatch.paired_cipher_types(all_results)] 
+        if self._generate_test_data:
+            paired_cipher_types = EvaluationBatch.paired_cipher_types(all_results)
+            return [EvaluationBatch.combined(pair) for pair in paired_cipher_types] 
+        else:
+            paired_cipher_types = TrainingBatch.paired_cipher_types(all_results)
+            return [TrainingBatch.combined(pair) for pair in paired_cipher_types] 
 
     def _dispatch_concurrent(self, *, ciphertext_worker, ciphertext_dataset, plaintext_worker, 
                              plaintext_dataset, number_of_processes):
@@ -1594,9 +1604,9 @@ class CipherStatisticsDataset:
         
         return (ciphertext_inputs_exhausted, plaintext_inputs_exhausted)
 
-    def _wait_for_results(self):
+    def _wait_for_results(self, number_of_processes):
         training_batches = []
-        for _ in range(self._dataset_workers):
+        for _ in range(number_of_processes):
             try:
                 result = self._processing_queue.popleft()
             except IndexError:
@@ -1812,7 +1822,7 @@ class CiphertextLine2CipherStatisticsWorker:
             features = features.reshape(features.shape[0], features.shape[1], 1)
         
         if self._generate_test_data:
-            return EvalTrainingBatch("rotor", features, labels, test_data)
+            return EvaluationBatch("rotor", features, labels, test_data)
         else:
             return TrainingBatch("rotor", features, labels)
     
@@ -1886,7 +1896,7 @@ class PlaintextLine2CipherStatisticsWorker:
 
         # multiprocessing_logger.info(f"Batch: '{batch}'; labels: '{labels}'.")
         if self._generate_test_data:
-            return EvalTrainingBatch("aca", batch, labels, ciphertexts)
+            return EvaluationBatch("aca", batch, labels, ciphertexts)
         else:
             return TrainingBatch("aca", batch, labels)
 
@@ -1960,17 +1970,17 @@ class TrainingBatch:
 
         return result
     
-class EvalTrainingBatch(TrainingBatch):
+class EvaluationBatch(TrainingBatch):
     """Subclass of `TrainingBatch` adding `ciphertexts` as a property. This property is 
     used in eval.py with architectures that take a feature-learning approach."""
-    
+
     def __init__(self, cipher_type, statistics, labels, ciphertexts):
         super().__init__(cipher_type, statistics, labels)
         assert len(statistics) == len(ciphertexts), "Number of ciphertexts must match length of labels and statistics!"
         self.ciphertexts = ciphertexts
 
     def extend(self, other):
-        if not isinstance(other, EvalTrainingBatch):
+        if not isinstance(other, EvaluationBatch):
             raise Exception("Can only extend EvalTrainingBatch with other EvalTrainingBatch instances")
         
         super().extend(other)
@@ -1978,7 +1988,17 @@ class EvalTrainingBatch(TrainingBatch):
         if len(self.ciphertexts) == 0:
             self.ciphertexts = other.ciphertexts
         else:
-            self.ciphertexts = tf.concat([self.ciphertexts, other.ciphertexts], 0)
+            self.ciphertexts = self.ciphertexts + other.ciphertexts
     
     def tuple(self):
         return (self.statistics, self.labels, self.ciphertexts)
+    
+    @staticmethod
+    def combined(training_batches):
+        """Takes lists of `TrainingBatch`es and combines them into one large `TrainingBatch`."""
+        result = EvaluationBatch("mixed", [], [], [])
+
+        for training_batch in training_batches:
+            result.extend(training_batch)
+
+        return result
