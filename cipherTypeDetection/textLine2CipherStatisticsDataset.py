@@ -1457,8 +1457,6 @@ class CipherStatisticsDataset:
         self._iteration = 0
         self._epoch = 0
         self._dataset_workers = dataset_workers
-        self._plaintext_batch_size = plaintext_dataset_params.batch_size
-        self._rotor_batch_size = rotor_ciphertext_dataset_params.batch_size
         
         self._pool = multiprocessing_pool.Pool(self._dataset_workers)
         # double ended queue for storing asynchronously processing functions
@@ -1471,20 +1469,10 @@ class CipherStatisticsDataset:
         self._initialize_datasets()
     
     def _initialize_datasets(self):
-        plaintext_params = self._plaintext_dataset_params
-        ciphertext_params = self._rotor_ciphertext_dataset_params
-        self._plaintext_dataset = PlaintextPathsDataset(plaintext_params.plaintext_paths, 
-                                                        self._plaintext_batch_size , 
-                                                        plaintext_params.cipher_types, 
-                                                        plaintext_params.min_text_len, 
-                                                        plaintext_params.max_text_len, 
-                                                        plaintext_params.keep_unknown_symbols,
+        self._plaintext_dataset = PlaintextPathsDataset(self._plaintext_dataset_params, 
                                                         self._logger)
-        self._ciphertext_dataset = RotorCiphertextsDataset(ciphertext_params.ciphertexts_with_labels, 
-                                                          self._rotor_batch_size,
-                                                          ciphertext_params.min_text_len,
-                                                          ciphertext_params.max_text_len,
-                                                          self._logger)
+        self._ciphertext_dataset = RotorCiphertextsDataset(self._rotor_ciphertext_dataset_params, 
+                                                           self._logger)
     
     @property
     def iteration(self):
@@ -1507,7 +1495,8 @@ class CipherStatisticsDataset:
     def batch_size(self):
         """The amount of input lines each worker process will process. This property influences
         the length of the returned `TrainingBatch`es of iterator method `__next__`."""
-        return self._plaintext_batch_size + self._rotor_batch_size
+        return (self._plaintext_dataset_params.batch_size + 
+                self._rotor_ciphertext_dataset_params.batch_size)
     
     @property
     def key_lengths_count(self):
@@ -1536,12 +1525,10 @@ class CipherStatisticsDataset:
 
         # process rotor cipher datasets
         ciphertext_worker = CiphertextLine2CipherStatisticsWorker(
-            self._rotor_ciphertext_dataset_params.max_text_len, 
+            self._rotor_ciphertext_dataset_params, 
             config_params)
         plaintext_worker = PlaintextLine2CipherStatisticsWorker(
-            self._plaintext_dataset_params.cipher_types, 
-            self._plaintext_dataset_params.max_text_len, 
-            self._plaintext_dataset_params.keep_unknown_symbols,
+            self._plaintext_dataset_params,
             config_params)
 
 
@@ -1625,27 +1612,29 @@ class RotorCiphertextsDatasetParameters:
     for the initialization of the dataset itself, as well as for the worker processes and
     the main statistics dataset."""
 
-    def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers, min_text_len, max_text_len):
+    def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers, 
+                 min_text_len, max_text_len, generate_test_data):
         self.ciphertexts_with_labels = ciphertexts_with_labels
         self.cipher_types = cipher_types
         self.batch_size = batch_size
         self.dataset_workers = dataset_workers
         self.min_text_len = min_text_len
         self.max_text_len = max_text_len
+        self.generate_test_data = generate_test_data
     
 class RotorCiphertextsDataset:
     """Takes rotor ciphertext (with their labels) as input and returns batched
     lists of the ciphertext lines (and their labels) as iteration result.
     The batching allows for splitting the input in workable chunks 
     (that fit in RAM) and can be distributed to multiple worker processes."""
-    def __init__(self, ciphertexts_with_labels, batch_size, min_text_len, max_text_len, logger):
-        self._ciphertexts_with_labels = ciphertexts_with_labels
-        self._batch_size = batch_size
-        self._logger = logger
+    def __init__(self, dataset_params, logger):
+        self._ciphertexts_with_labels = dataset_params.ciphertexts_with_labels
+        self._batch_size = dataset_params.batch_size
         self._index = 0
-        max_line_length = min(100, max_text_len) # limit max length to 100 to not exhaust inputs too fast
-        self._ciphertexts_with_labels = self._convert_lines_to_length(ciphertexts_with_labels, 
+        max_line_length = min(100, dataset_params.max_text_len) # limit max length to 100 to not exhaust inputs too fast
+        self._ciphertexts_with_labels = self._convert_lines_to_length(dataset_params.ciphertexts_with_labels, 
                                                                       max_line_length)
+        self._logger = logger
 
     def _convert_lines_to_length(self, ciphertexts_with_labels, max_length):
         ciphertexts_with_labels = sorted(ciphertexts_with_labels, key=lambda elem: elem[1])
@@ -1713,13 +1702,14 @@ class PlaintextPathsDataset:
     """Takes paths to plaintexts and returns list of size `batch_size` with lines
     from the plaintext files."""
 
-    def __init__(self, plaintext_paths, batch_size, cipher_types, 
-                 min_text_len, max_text_len, keep_unknown_symbols, logger):
-        self._batch_size = batch_size
-        self._min_text_len = min_text_len
-        self._max_text_len = max_text_len
-        self._keep_unknown_symbols = keep_unknown_symbols
+    def __init__(self, dataset_params, logger):
+        self._batch_size = dataset_params.batch_size
+        self._min_text_len = dataset_params.min_text_len
+        self._max_text_len = dataset_params.max_text_len
+        self._keep_unknown_symbols = dataset_params.keep_unknown_symbols
         self._logger = logger
+
+        cipher_types = dataset_params.cipher_types
 
         key_lengths_count = 0
         for cipher_t in cipher_types:
@@ -1730,7 +1720,7 @@ class PlaintextPathsDataset:
                 key_lengths_count += 1
         self._key_lengths_count = key_lengths_count
 
-        self._plaintext_dataset = tf.data.TextLineDataset(plaintext_paths)
+        self._plaintext_dataset = tf.data.TextLineDataset(dataset_params.plaintext_paths)
         self._dataset_iter = self._plaintext_dataset.__iter__()
 
         self._index = 0
@@ -1793,8 +1783,9 @@ class CiphertextLine2CipherStatisticsWorker:
     input. Therefore the output of the __next__ method will return lists of length 
     `dataset_workers`."""
 
-    def __init__(self, max_text_len, config_params):
-        self._max_text_len = max_text_len
+    def __init__(self, dataset_params, config_params):
+        self._max_text_len = dataset_params.max_text_len
+        self._generate_test_data = dataset_params.generate_test_data
         self._config_params = config_params
 
     def perform(self, ciphertexts_with_labels):
@@ -1802,6 +1793,7 @@ class CiphertextLine2CipherStatisticsWorker:
         labels = []
 
         config = self._config_params
+        test_data = []
 
         for ciphertext_line, label in ciphertexts_with_labels:
             processed_line = self._preprocess_ciphertext_line(ciphertext_line)
@@ -1812,11 +1804,17 @@ class CiphertextLine2CipherStatisticsWorker:
                 features.append(feature)
             else:
                 features.append(processed_line)
+            if self._generate_test_data:
+                test_data.append(processed_line)
             
         if config.pad_input:
             features = pad_sequences(features, maxlen=self._max_text_len)
             features = features.reshape(features.shape[0], features.shape[1], 1)
-        return TrainingBatch("rotor", tf.convert_to_tensor(features), tf.convert_to_tensor(labels))
+        
+        if self._generate_test_data:
+            return EvalTrainingBatch("rotor", features, labels, test_data)
+        else:
+            return TrainingBatch("rotor", features, labels)
     
     def _preprocess_ciphertext_line(self, ciphertext_line):
         cleaned = ciphertext_line.strip().replace(' ', '').replace('\n', '')
@@ -1844,10 +1842,11 @@ class PlaintextLine2CipherStatisticsWorker:
     encrypted lines. Therefore the output of the __next__ method will return lists of length 
     `dataset_workers`. Each item in the list is of type `TrainingBatch`.
     """
-    def __init__(self, cipher_types, max_text_len, keep_unknown_symbols, config_params):
-        self._keep_unknown_symbols = keep_unknown_symbols
-        self._cipher_types = cipher_types
-        self._max_text_len = max_text_len
+    def __init__(self, dataset_params, config_params):
+        self._keep_unknown_symbols = dataset_params.keep_unknown_symbols
+        self._cipher_types = dataset_params.cipher_types
+        self._max_text_len = dataset_params.max_text_len
+        self._generate_test_data = dataset_params.generate_test_data
         self._config_params = config_params
 
     def perform(self, plaintexts):
@@ -1855,6 +1854,7 @@ class PlaintextLine2CipherStatisticsWorker:
         labels = []
 
         config = self._config_params
+        ciphertexts = []
 
         for line in plaintexts:
             for cipher_type in self._cipher_types:
@@ -1876,6 +1876,8 @@ class PlaintextLine2CipherStatisticsWorker:
                         batch.append(statistics)
                     else:
                         batch.append(list(ciphertext))
+                    if self._generate_test_data:
+                        ciphertexts.append(ciphertext)
                     labels.append(label)
 
         if config.pad_input:
@@ -1883,7 +1885,10 @@ class PlaintextLine2CipherStatisticsWorker:
             batch = batch.reshape(batch.shape[0], batch.shape[1], 1)
 
         # multiprocessing_logger.info(f"Batch: '{batch}'; labels: '{labels}'.")
-        return TrainingBatch("aca", tf.convert_to_tensor(batch), tf.convert_to_tensor(labels))
+        if self._generate_test_data:
+            return EvalTrainingBatch("aca", batch, labels, ciphertexts)
+        else:
+            return TrainingBatch("aca", batch, labels)
 
 class TrainingBatch:
     """Encapsulates the calculates statistics (features) and their labels
@@ -1904,13 +1909,6 @@ class TrainingBatch:
 
     def __len__(self):
         return len(self.statistics)
-    
-    def append(self, entry):
-        if not isinstance(entry, tuple) and len(entry) != 2:
-            raise Exception("Only allowed to append tuples with statistics and "
-                            "corresponding label to TrainingBatch.")
-        self.statistics.append(entry[0])
-        self.labels.append(entry[1])
     
     def extend(self, other):
         if not isinstance(other, TrainingBatch):
@@ -1937,26 +1935,6 @@ class TrainingBatch:
             if training_batch.cipher_type != first_batch.cipher_type:
                 return False
         return True
-
-    @staticmethod
-    def shuffled(training_batches):
-        """Takes a list of `TrainingBatch`es and mixes the entries. Returns the same number
-        of batches with the elements distibuted equally."""
-        length = len(training_batches)
-        result = [TrainingBatch("mixed", [], []) for _ in range(length)]
-
-        for training_batch in training_batches:    
-            for index in range(len(training_batch)):
-                statistic = training_batch.statistics[index]
-                label = training_batch.labels[index]
-                result[index % length].append((statistic, label))
-
-        # convert lists back to tensors
-        for training_batch in result:
-            training_batch.statistics = tf.convert_to_tensor(training_batch.statistics)
-            training_batch.labels = tf.convert_to_tensor(training_batch.labels)
-
-        return result
     
     @staticmethod
     def combined(training_batches):
@@ -1965,10 +1943,6 @@ class TrainingBatch:
 
         for training_batch in training_batches:
             result.extend(training_batch)
-
-        # convert lists back to tensors
-        result.statistics = tf.convert_to_tensor(result.statistics)
-        result.labels = tf.convert_to_tensor(result.labels)
 
         return result
 
@@ -1985,3 +1959,26 @@ class TrainingBatch:
             result.append([aca_batch, rotor_batch])
 
         return result
+    
+class EvalTrainingBatch(TrainingBatch):
+    """Subclass of `TrainingBatch` adding `ciphertexts` as a property. This property is 
+    used in eval.py with architectures that take a feature-learning approach."""
+    
+    def __init__(self, cipher_type, statistics, labels, ciphertexts):
+        super().__init__(cipher_type, statistics, labels)
+        assert len(statistics) == len(ciphertexts), "Number of ciphertexts must match length of labels and statistics!"
+        self.ciphertexts = ciphertexts
+
+    def extend(self, other):
+        if not isinstance(other, EvalTrainingBatch):
+            raise Exception("Can only extend EvalTrainingBatch with other EvalTrainingBatch instances")
+        
+        super().extend(other)
+
+        if len(self.ciphertexts) == 0:
+            self.ciphertexts = other.ciphertexts
+        else:
+            self.ciphertexts = tf.concat([self.ciphertexts, other.ciphertexts], 0)
+    
+    def tuple(self):
+        return (self.statistics, self.labels, self.ciphertexts)

@@ -399,13 +399,15 @@ def load_datasets_from_disk(args, cipher_types):
                                                             rotor_train_dataset_size,
                                                             args.dataset_workers, 
                                                             args.min_train_len, 
-                                                            args.max_train_len)
+                                                            args.max_train_len,
+                                                            generate_test_data=False)
     test_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(test_rotor_ciphertexts, 
                                                             config.ROTOR_CIPHER_TYPES,
                                                             rotor_train_dataset_size,
                                                             args.dataset_workers, 
                                                             args.min_test_len, 
-                                                            args.max_test_len)
+                                                            args.max_test_len,
+                                                            generate_test_data=False)
     
     train_ds = CipherStatisticsDataset(train_plaintext_parameters, train_rotor_ciphertexts_parameters)
     test_ds = CipherStatisticsDataset(test_plaintext_parameters, test_rotor_ciphertexts_parameters)
