@@ -382,10 +382,12 @@ def load_datasets_from_disk(args, cipher_types):
                                                args.min_test_len, args.max_test_len,
                                                args.keep_unknown_symbols, args.dataset_workers)
     
-    # Calculate a different batch size for rotor ciphertexts. There are fewer samples
-    # that should not be exhausted too quickly, but should occur often enough that the
-    # ML architecture recognizes them.
-    rotor_train_dataset_size = (args.train_dataset_size // len(config.CIPHER_TYPES)) * 4
+    # Calculate batch size for rotor ciphers. The amount of samples per rotor cipher should be
+    # equal to the amount of samples per aca cipher.
+    number_of_rotor_ciphers = len(config.ROTOR_CIPHER_TYPES)
+    number_of_aca_ciphers = len(config.CIPHER_TYPES) - number_of_rotor_ciphers
+    amount_of_samples_per_cipher = args.train_dataset_size // number_of_aca_ciphers
+    rotor_train_dataset_size = amount_of_samples_per_cipher * number_of_rotor_ciphers
 
     # TODO: Move into calling function! (ROTOR_CIPHER_TYPES)
     train_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(train_rotor_ciphertexts, 
