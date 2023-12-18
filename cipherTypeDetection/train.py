@@ -372,7 +372,7 @@ def load_datasets_from_disk(args, cipher_types):
                     
     train_plaintexts, test_plaintexts = train_test_split(plaintext_files, test_size=0.05, 
                                                          random_state=42, shuffle=True)
-    train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertexts, test_size=0.05, 
+    train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertexts, test_size=0.2, 
                                                                        random_state=42, shuffle=True)
 
     train_plaintext_parameters = PlaintextPathsDatasetParameters(train_plaintexts, cipher_types, args.train_dataset_size, 
