@@ -1551,7 +1551,7 @@ class CipherStatisticsDataset:
         # Inputs exhausted: Increase epoch, re-initialize datasets and therefore begin 
         # iteration from the start.
         if ciphertext_inputs_exhausted or plaintext_inputs_exhausted:
-            print(f"CipherStatisticsDataset: Ciphertexts and plaintexts of epoch {self._epoch} exhausted! Resetting iterators!")
+            print(f"CipherStatisticsDataset: Ciphertexts or plaintexts of epoch {self._epoch} exhausted! Resetting iterators!")
             self._epoch += 1
             self._initialize_datasets()
 
