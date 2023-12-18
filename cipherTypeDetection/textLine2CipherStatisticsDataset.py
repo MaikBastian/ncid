@@ -1,3 +1,4 @@
+from itertools import groupby
 from pathlib import Path
 import tensorflow as tf
 import cipherTypeDetection.config as config
@@ -1642,8 +1643,9 @@ class RotorCiphertextsDataset:
         self._batch_size = dataset_params.batch_size
         self._index = 0
         max_line_length = min(100, dataset_params.max_text_len) # limit max length to 100 to not exhaust inputs too fast
-        self._ciphertexts_with_labels = self._convert_lines_to_length(dataset_params.ciphertexts_with_labels, 
-                                                                      max_line_length)
+        self._convert_lines_to_length(dataset_params.ciphertexts_with_labels, 
+                                      max_line_length)
+        self._rearrange_ciphertexts()
         self._logger = logger
 
     def _convert_lines_to_length(self, ciphertexts_with_labels, max_length):
@@ -1672,8 +1674,23 @@ class RotorCiphertextsDataset:
                 splitted = sample[splitIndex:splitIndex + max_length]
                 results.append((splitted, labels[index]))
 
-        random.shuffle(results)
-        return results
+        self._ciphertexts_with_labels = results
+
+    def _rearrange_ciphertexts(self):
+        get_label = lambda element: element[1]
+        # Ensure _ciphertexts_with_labels is sorted
+        self._ciphertexts_with_labels = sorted(self._ciphertexts_with_labels, key=get_label)
+        # Group by label
+        grouped = []
+        for _, group in groupby(self._ciphertexts_with_labels, key=get_label):
+            grouped.append(list(group))
+
+        rearranged = []
+        for group in zip(*grouped):
+            for element in group:
+                rearranged.append(element)
+
+        self._ciphertexts_with_labels = rearranged
 
     def __iter__(self):
         return self
