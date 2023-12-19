@@ -450,13 +450,33 @@ def train_model(model, args, train_ds):
         first_rotor_cipher_class = len(config.CIPHER_TYPES) - len(config.ROTOR_CIPHER_TYPES)
         weights[np.where(class_labels.numpy() > first_rotor_cipher_class)] = 2
         return weights
+    
+    checkpoints_dir = Path('../data/checkpoints')
+    def delete_previous_checkpoints():
+        shutil.rmtree(checkpoints_dir)
+
+    def create_checkpoint_callback():
+        if not checkpoints_dir.exists():
+            os.mkdir(checkpoints_dir)
+        checkpoint_file_path = checkpoints_dir / "epoch_{epoch:02d}-accuracy_{accuracy:.2f}.h5"
+
+        return tf.keras.callbacks.ModelCheckpoint(
+            filepath=checkpoint_file_path,
+            save_weights_only=False,
+            monitor='val_accuracy',
+            mode='max',
+            save_best_only=False,
+            save_freq=100)
 
     print('Training model...')
+    delete_previous_checkpoints()
+
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir='../data/logs', update_freq='epoch')
     early_stopping_callback = MiniBatchEarlyStopping(
         min_delta=1e-5, patience=250, monitor='accuracy', mode='max', restore_best_weights=True)
     # time_based_decay_lrate_callback = TimeBasedDecayLearningRateScheduler(args.train_dataset_size)
     custom_step_decay_lrate_callback = CustomStepDecayLearningRateScheduler(early_stopping_callback)
+    checkpoint_callback = create_checkpoint_callback()
     start_time = time.time()
     train_iter = 0
     train_epoch = 0
@@ -516,7 +536,7 @@ def train_model(model, args, train_ds):
                                        validation_data=(val_data, val_labels), epochs=args.epochs,
                                        sample_weight=sample_weights(labels),
                                        callbacks=[early_stopping_callback, tensorboard_callback,    
-                                                  custom_step_decay_lrate_callback])
+                                                  custom_step_decay_lrate_callback, checkpoint_callback])
                 # time_based_decay_lrate_callback.iteration = train_iter
                 history = model[1].partial_fit(statistics, labels, classes=classes, 
                                                sample_weight=sample_weights(labels))
@@ -526,7 +546,7 @@ def train_model(model, args, train_ds):
                                     validation_data=(val_data, val_labels), epochs=args.epochs,
                                     sample_weight=sample_weights(labels),
                                     callbacks=[early_stopping_callback, tensorboard_callback, 
-                                               custom_step_decay_lrate_callback])
+                                               custom_step_decay_lrate_callback, checkpoint_callback])
                 # time_based_decay_lrate_callback.iteration = train_iter
 
             # print for Decision Tree, Naive Bayes and Random Forests
