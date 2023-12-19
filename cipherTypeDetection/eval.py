@@ -98,16 +98,16 @@ def benchmark(args_, model_):
                                                                args_.max_text_len,
                                                                args_.keep_unknown_symbols, 
                                                                args_.dataset_workers, 
-                                                               generate_test_data=True)
+                                                               generate_evaluation_data=True)
     rotor_dataset_params = RotorCiphertextsDatasetParameters(rotor_ciphertexts, 
                                                             config.ROTOR_CIPHER_TYPES, 
                                                             rotor_dataset_size,
                                                             args_.dataset_workers, 
                                                             args_.min_text_len, 
                                                             args_.max_text_len,
-                                                            generate_test_data=True)
+                                                            generate_evalutation_data=True)
     dataset = CipherStatisticsDataset(plaintext_dataset_params, rotor_dataset_params, 
-                                      generate_test_data=True)
+                                      generate_evaluation_data=True)
 
     if args_.dataset_size % dataset.key_lengths_count != 0:
         print("WARNING: the --dataset_size parameter must be dividable by the amount of --ciphers  and the length configured KEY_LENGTHS in"

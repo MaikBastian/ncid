@@ -1464,7 +1464,7 @@ class CipherStatisticsDataset:
     """
 
     def __init__(self, plaintext_dataset_params, rotor_ciphertext_dataset_params, 
-                 generate_test_data=False):
+                 generate_evaluation_data=False):
         assert plaintext_dataset_params.dataset_workers == rotor_ciphertext_dataset_params.dataset_workers
 
         dataset_workers = plaintext_dataset_params.dataset_workers
@@ -1483,7 +1483,7 @@ class CipherStatisticsDataset:
 
         self._initialize_datasets()
 
-        self._generate_test_data = generate_test_data
+        self._generate_evaluation_data = generate_evaluation_data
     
     def _initialize_datasets(self):
         self._plaintext_dataset = PlaintextPathsDataset(self._plaintext_dataset_params, 
@@ -1580,7 +1580,7 @@ class CipherStatisticsDataset:
 
         # Combine ACA and rotor cipher training batches. Each batch should contain some 
         # statistics and labels of both.
-        if self._generate_test_data:
+        if self._generate_evaluation_data:
             paired_cipher_types = EvaluationBatch.paired_cipher_types(all_results)
             return [EvaluationBatch.combined(pair) for pair in paired_cipher_types] 
         else:
@@ -1637,14 +1637,14 @@ class RotorCiphertextsDatasetParameters:
     the main statistics dataset."""
 
     def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers, 
-                 min_text_len, max_text_len, generate_test_data):
+                 min_text_len, max_text_len, generate_evalutation_data):
         self.ciphertexts_with_labels = ciphertexts_with_labels
         self.cipher_types = cipher_types
         self.batch_size = batch_size
         self.dataset_workers = dataset_workers
         self.min_text_len = min_text_len
         self.max_text_len = max_text_len
-        self.generate_test_data = generate_test_data
+        self.generate_evaluation_data = generate_evalutation_data
     
 class RotorCiphertextsDataset:
     """Takes rotor ciphertext (with their labels) as input and returns batched
@@ -1728,7 +1728,7 @@ class PlaintextPathsDatasetParameters:
 
     def __init__(self, plaintext_paths, cipher_types, batch_size, min_text_len, max_text_len, 
                  keep_unknown_symbols=False, dataset_workers=None,
-                 generate_test_data=False):
+                 generate_evaluation_data=False):
         self.plaintext_paths = plaintext_paths
         self.cipher_types = cipher_types
         self.batch_size = batch_size
@@ -1736,7 +1736,7 @@ class PlaintextPathsDatasetParameters:
         self.max_text_len = max_text_len
         self.keep_unknown_symbols = keep_unknown_symbols
         self.dataset_workers = dataset_workers
-        self.generate_test_data = generate_test_data
+        self.generate_evaluation_data = generate_evaluation_data
     
 class PlaintextPathsDataset:
     """Takes paths to plaintexts and returns list of size `batch_size` with lines
@@ -1825,7 +1825,7 @@ class CiphertextLine2CipherStatisticsWorker:
 
     def __init__(self, dataset_params, config_params):
         self._max_text_len = dataset_params.max_text_len
-        self._generate_test_data = dataset_params.generate_test_data
+        self._generate_evaluation_data = dataset_params.generate_evaluation_data
         self._config_params = config_params
 
     def perform(self, ciphertexts_with_labels):
@@ -1844,14 +1844,14 @@ class CiphertextLine2CipherStatisticsWorker:
                 features.append(feature)
             else:
                 features.append(processed_line)
-            if self._generate_test_data:
+            if self._generate_evaluation_data:
                 test_data.append(processed_line)
             
         if config.pad_input:
             features = pad_sequences(features, maxlen=self._max_text_len)
             features = features.reshape(features.shape[0], features.shape[1], 1)
         
-        if self._generate_test_data:
+        if self._generate_evaluation_data:
             return EvaluationBatch("rotor", features, labels, test_data)
         else:
             return TrainingBatch("rotor", features, labels)
@@ -1886,7 +1886,7 @@ class PlaintextLine2CipherStatisticsWorker:
         self._keep_unknown_symbols = dataset_params.keep_unknown_symbols
         self._cipher_types = dataset_params.cipher_types
         self._max_text_len = dataset_params.max_text_len
-        self._generate_test_data = dataset_params.generate_test_data
+        self._generate_evaluation_data = dataset_params.generate_evaluation_data
         self._config_params = config_params
 
     def perform(self, plaintexts):
@@ -1916,7 +1916,7 @@ class PlaintextLine2CipherStatisticsWorker:
                         batch.append(statistics)
                     else:
                         batch.append(list(ciphertext))
-                    if self._generate_test_data:
+                    if self._generate_evaluation_data:
                         ciphertexts.append(ciphertext)
                     labels.append(label)
 
@@ -1925,7 +1925,7 @@ class PlaintextLine2CipherStatisticsWorker:
             batch = batch.reshape(batch.shape[0], batch.shape[1], 1)
 
         # multiprocessing_logger.info(f"Batch: '{batch}'; labels: '{labels}'.")
-        if self._generate_test_data:
+        if self._generate_evaluation_data:
             return EvaluationBatch("aca", batch, labels, ciphertexts)
         else:
             return TrainingBatch("aca", batch, labels)
