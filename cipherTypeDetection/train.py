@@ -308,8 +308,11 @@ def should_download_datasets(args):
 def download_datasets(args):
     """Downloads plaintexts and saves them in the plaintext_input_directory"""
     print("Downloading Datsets...")
-    # TODO: Does not create the directory!
-    tfds.download.add_checksums_dir('../data/checksums/')
+    checksums_dir = '../data/checksums/'
+    if not Path(checksums_dir).exists():
+        os.mkdir(checksums_dir)
+    tfds.download.add_checksums_dir(checksums_dir)
+
     download_manager = tfds.download.download_manager.DownloadManager(download_dir='../data/', 
                                                        extract_dir=args.plaintext_input_directory)
     data_url = ('https://drive.google.com/uc?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V&export=download' +
