@@ -415,8 +415,7 @@ def load_datasets_from_disk(args, cipher_types):
     print("Datasets loaded.\n")
     return train_ds, test_ds
     
-# TODO: Better name!
-def create_model_for_hardware_config(extend_model, cipher_types):
+def create_model_with_distribution_strategy(extend_model, cipher_types):
     """Creates models depending on the GPU count and on extend_model"""
     print('Creating model...')
 
@@ -720,7 +719,7 @@ def aca_pipeline(cipher_types):
     # sys.exit(0)
 
     # ACA ciphers
-    model = create_model_for_hardware_config(extend_model, cipher_types)
+    model = create_model_with_distribution_strategy(extend_model, cipher_types)
     early_stopping_callback, train_iter, training_stats = train_model(model, args, train_ds)
     save_model(model, args)
     prediction_stats, incorrect = predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
