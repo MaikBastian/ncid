@@ -701,7 +701,6 @@ def aca_pipeline(cipher_types):
             sys.exit(1)
 
     cipher_types = expand_cipher_groups(cipher_types)
-    # config.CIPHER_TYPES = cipher_types
 
     if args.train_dataset_size * args.dataset_workers > args.max_iter:
         print("ERROR: --train_dataset_size * --dataset_workers must not be bigger than --max_iter. "
@@ -714,9 +713,6 @@ def aca_pipeline(cipher_types):
         download_datasets(args)
 
     train_ds, test_ds = load_datasets_from_disk(args, cipher_types)
-    
-    # print("DONE!")
-    # sys.exit(0)
 
     # ACA ciphers
     model = create_model_with_distribution_strategy(extend_model, cipher_types)
