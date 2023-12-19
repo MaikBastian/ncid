@@ -1665,9 +1665,8 @@ class RotorCiphertextsDataset:
         self._ciphertexts_with_labels = dataset_params.ciphertexts_with_labels
         self._batch_size = dataset_params.batch_size
         self._index = 0
-        max_line_length = min(100, dataset_params.max_text_len) # limit max length to 100 to not exhaust inputs too fast
         self._convert_lines_to_length(dataset_params.ciphertexts_with_labels, 
-                                      max_line_length)
+                                      dataset_params.max_text_len)
         self._rearrange_ciphertexts()
         self._logger = logger
 
