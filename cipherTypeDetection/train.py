@@ -392,7 +392,6 @@ def load_datasets_from_disk(args, cipher_types):
     amount_of_samples_per_cipher = args.train_dataset_size // number_of_aca_ciphers
     rotor_train_dataset_size = amount_of_samples_per_cipher * number_of_rotor_ciphers
 
-    # TODO: Move into calling function! (ROTOR_CIPHER_TYPES)
     train_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(train_rotor_ciphertexts, 
                                                             config.ROTOR_CIPHER_TYPES, 
                                                             rotor_train_dataset_size,
