@@ -183,6 +183,14 @@ def create_model(extend_model, cipher_types):
         model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
                        metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
 
+    # SVM
+    if architecture == "SVM":
+        model_ = SVC(probability=True, C=1, gamma=0.0001, kernel="rbf")
+
+    # kNN
+    if architecture == "kNN":
+        model_ = KNeighborsClassifier(90, weights="distance", metric="euclidean")
+
     # FFNN, NB
     if architecture == "[FFNN,NB]":
         model_ffnn = tf.keras.Sequential()
@@ -195,32 +203,21 @@ def create_model(extend_model, cipher_types):
         model_nb = MultinomialNB(alpha=config.alpha, fit_prior=config.fit_prior)
         return [model_ffnn, model_nb]
     
-    if architecture == "SVM-Rotor":
-        model_ = SVC(probability=True, C=1, gamma=0.0001, kernel="rbf")
-
-    if architecture == "RF-Rotor":
-        print("UNIMPLEMENTED ARCHITECTURE!")
-        sys.exit(1)
-
-    if architecture == "kNN-Rotor":
-        print("UNIMPLEMENTED ARCHITECTURE!")
-        sys.exit(1)
-
-    if architecture == "LSTM-Rotor":
-        print("UNIMPLEMENTED ARCHITECTURE!")
-        sys.exit(1)
-
-    if architecture == "MLP-Rotor":
-        print("UNIMPLEMENTED ARCHITECTURE!")
-        sys.exit(1)
-
-    if architecture == "CNN-Rotor":
-        print("UNIMPLEMENTED ARCHITECTURE!")
-        sys.exit(1)
-
-    if architecture == "ELM-Rotor":
-        print("UNIMPLEMENTED ARCHITECTURE!")
-        sys.exit(1)
+    if architecture == "[DT,ET,RF,SVM,kNN]":
+        dt = DecisionTreeClassifier(criterion=config.criterion, ccp_alpha=config.ccp_alpha)
+        et = ExtraTreesClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
+                                      bootstrap=config.bootstrap, n_jobs=30,
+                                      max_features=config.max_features, max_depth=30, 
+                                      min_samples_split=config.min_samples_split,
+                                      min_samples_leaf=config.min_samples_leaf)
+        rf = RandomForestClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
+                                        bootstrap=config.bootstrap, n_jobs=30,
+                                        max_features=config.max_features, max_depth=30, 
+                                        min_samples_split=config.min_samples_split,
+                                        min_samples_leaf=config.min_samples_leaf)
+        svm = SVC(probability=True, C=1, gamma=0.0001, kernel="rbf")
+        knn = KNeighborsClassifier(90, weights="distance", metric="euclidean")
+        return [dt, et, rf, svm, knn]
 
     return model_
 
@@ -282,7 +279,7 @@ def parse_arguments():
                              'If this argument is set to -1 no upper limit is used.')
     parser.add_argument('--architecture', default='FFNN', type=str, 
                         choices=['FFNN', 'CNN', 'LSTM', 'DT', 'NB', 'RF', 'ET', 'Transformer',
-                                 '[FFNN,NB]'],
+                                 'SVM', 'kNN', '[FFNN,NB]', '[DT,ET,RF,SVM,kNN]'],
                         help='The architecture to be used for training. \n'
                              'Possible values are:\n'
                              '- FFNN\n'
@@ -293,7 +290,11 @@ def parse_arguments():
                              '- RF\n'
                              '- ET\n'
                              '- Transformer\n'
-                             '- [FFNN,NB]')
+                             '- SVM\n'
+                             '- kNN\n'
+                             '- [FFNN,NB]\n'
+                             '- [DT,ET,RF,SVM,kNN]'
+                             )
     parser.add_argument('--extend_model', default=None, type=str,
                         help='Load a trained model from a file and use it as basis for the new training.')
 
@@ -490,8 +491,8 @@ def train_model(model, args, train_ds):
     while train_ds.iteration < args.max_iter:
         training_batches = next(train_ds)
 
-        # DTs, RFs and ETs only support one fit call: Sample all batches into one large batch.
-        if architecture in ("DT", "RF", "ET"):
+        # For architectures that only support one fit call: Sample all batches into one large batch.
+        if architecture in ("DT", "RF", "ET", "SVM", "kNN", "[DT,ET,RF,SVM,kNN]"):
             for training_batch in training_batches:
                 combined_batch.extend(training_batch)
             if train_ds.iteration < args.max_iter:
@@ -516,10 +517,14 @@ def train_model(model, args, train_ds):
             train_iter -= len(training_batch) * 0.3
 
             # Decision Tree training
-            if architecture in ("DT", "RF", "ET"):
+            if architecture in ("DT", "RF", "ET", "SVM", "kNN"):
                 train_iter = len(labels) * 0.7
-                print("Start training the decision tree.")
-                history = model.fit(statistics, labels, sample_weight=sample_weights(labels))
+                print(f"Start training the {architecture}.")
+                if architecture == "kNN":
+                    # TODO: Since scikit's kNN does not support sample weights: Provide manually?
+                    history = model.fit(statistics, labels)
+                else:
+                    history = model.fit(statistics, labels, sample_weight=sample_weights(labels))
                 if architecture == "DT":
                     plt.gcf().set_size_inches(25, 25 / math.sqrt(2))
                     print("Plotting tree.")
@@ -542,6 +547,17 @@ def train_model(model, args, train_ds):
                 # time_based_decay_lrate_callback.iteration = train_iter
                 history = model[1].partial_fit(statistics, labels, classes=classes, 
                                                sample_weight=sample_weights(labels))
+            
+            # DT, ET, RF, SVM, kNN
+            elif architecture == "[DT,ET,RF,SVM,kNN]":
+                train_iter = len(labels) * 0.7
+                print(f"Start training the {architecture}.")
+                dt, et, rf, svm, knn = model
+                for index, m in enumerate([dt, et, rf, svm]):
+                    m.fit(statistics, labels, sample_weight=sample_weights(labels))
+                    print(f"Trained model {index + 1} of {len(model)}")
+                knn.fit(statistics, labels)
+                print(f"Trained model {len(model)} of {len(model)}")
 
             else:
                 history = model.fit(statistics, labels, batch_size=args.batch_size, 
@@ -552,7 +568,7 @@ def train_model(model, args, train_ds):
                 # time_based_decay_lrate_callback.iteration = train_iter
 
             # print for Decision Tree, Naive Bayes and Random Forests
-            if architecture in ("DT", "NB", "RF", "ET"):
+            if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
                 val_score = model.score(val_data, val_labels)
                 train_score = model.score(statistics, labels)
                 print("train accuracy: %f, validation accuracy: %f" % (train_score, val_score))
@@ -561,6 +577,12 @@ def train_model(model, args, train_ds):
                 val_score = model[1].score(val_data, val_labels)
                 train_score = model[1].score(statistics, labels)
                 print("train accuracy: %f, validation accuracy: %f" % (train_score, val_score))
+
+            if architecture == "[DT,ET,RF,SVM,kNN]":
+                for m in model:
+                    val_score = m.score(val_data, val_labels)
+                    train_score = m.score(statistics, labels)
+                    print(f"{type(m).__name__}: train accuracy: {train_score}, validation accuracy: {val_score}")
 
             if train_ds.epoch > 0:
                 train_epoch = train_ds.iteration // ((train_iter + train_ds.batch_size * train_ds.dataset_workers) // train_ds.epoch)
@@ -596,7 +618,7 @@ def save_model(model, args):
     model_path = os.path.join(args.save_directory, model_name)
     if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
         model.save(model_path)
-    elif architecture in ("DT", "NB", "RF", "ET"):
+    elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
         with open(model_path, "wb") as f:
             # this gets very large
             pickle.dump(model, f)
@@ -605,6 +627,11 @@ def save_model(model, args):
         with open('../data/models/' + model_path.split('.')[0] + "_nb.h5", "wb") as f:
             # this gets very large
             pickle.dump(model[1], f)
+    elif architecture == "[DT,ET,RF,SVM,kNN]":
+        for index, name in enumerate(["dt","et","rf","svm","knn"]):
+            with open('../data/models/' + model_path.split('.')[0] + f"_{name}.h5", "wb") as f:
+                # this gets very large
+                pickle.dump(model[index], f)
     with open('../data/' + model_path.split('.')[0] + '_parameters.txt', 'w') as f:
         for arg in vars(args):
             f.write("{:23s}= {:s}\n".format(arg, str(getattr(args, arg))))
@@ -651,10 +678,14 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
             statistics, labels = training_batch.tuple()
             
             # Decision Tree, Naive Bayes prediction
-            if architecture in ("DT", "NB", "RF", "ET"):
+            if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
                 prediction = model.predict_proba(statistics)
             elif architecture == "[FFNN,NB]":
                 prediction = model[0].predict(statistics, batch_size=args.batch_size, verbose=1)
+            elif architecture == "[DT,ET,RF,SVM,kNN]":
+                # TODO: Altough in line with [FFNN,NB], is this reasonable or should prediction
+                # be a combination of all predictions?
+                prediction = model[0].predict_proba(statistics)
             else:
                 prediction = model.predict(statistics, batch_size=args.batch_size, verbose=1)
             for i in range(len(prediction)):
@@ -715,6 +746,7 @@ def aca_pipeline(cipher_types):
     extend_model = args.extend_model
     if extend_model is not None:
         if architecture not in ('FFNN', 'CNN', 'LSTM'):
+            # TODO: Also holds for SVM, kNN?
             print('ERROR: Models with the architecture %s can not be extended!' % architecture,
                   file=sys.stderr)
             sys.exit(1)
@@ -1091,7 +1123,9 @@ if __name__ == "__main__":
         architecture = args.architecture
         cipher_types = args.ciphers.split(',')
 
-        if architecture in ("LSTM", "FFNN", "CNN", "RF", "ET", "DT", "NB", "Transformer", "[FFNN,NB]"):
+        aca_architectures = ("LSTM", "FFNN", "CNN", "RF", "ET", "DT", "NB", "Transformer", 
+                             "SVM", "kNN", "[FFNN,NB]", "[DT,ET,RF,SVM,kNN]")
+        if architecture in aca_architectures:
             aca_pipeline(cipher_types)
         elif architecture in ("SVM-Rotor", "kNN-Rotor", "RF-Rotor"):
             rotor_pipeline()
