@@ -130,7 +130,7 @@ def benchmark(args_, model_):
                 results.append(model_.evaluate(statistics, labels, batch_size=args_.batch_size, verbose=1))
             if architecture in ("CNN", "LSTM", "Transformer"):
                 results.append(model_.evaluate(ciphertexts, labels, batch_size=args_.batch_size, verbose=1))
-            elif architecture in ("DT", "NB", "RF", "ET"):
+            elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
                 results.append(model_.score(statistics, labels))
                 print("accuracy: %f" % (results[-1]))
             elif architecture == "Ensemble":
@@ -163,7 +163,7 @@ def benchmark(args_, model_):
         avg_acc = avg_acc / len(results)
         avg_k3_acc = avg_k3_acc / len(results)
         print("Average evaluation results: loss: %f, accuracy: %f, k3_accuracy: %f\n" % (avg_loss, avg_acc, avg_k3_acc))
-    elif architecture in ("DT", "NB", "RF", "ET", "Ensemble"):
+    elif architecture in ("DT", "NB", "RF", "ET", "Ensemble", "SVM", "kNN"):
         avg_test_acc = 0
         for acc in results:
             avg_test_acc += acc
@@ -221,7 +221,7 @@ def evaluate(args_, model_):
                     elif architecture == "Ensemble":
                         results.append(model_.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels),
                                        args_.batch_size, verbose=0))
-                    elif architecture in ("DT", "NB", "RF", "ET"):
+                    elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
                         results.append(model.score(batch, tf.convert_to_tensor(labels)))
                     batch = []
                     batch_ciphertexts = []
@@ -237,7 +237,7 @@ def evaluate(args_, model_):
                     results.append(
                         model_.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels),
                                         args_.batch_size, verbose=0))
-                elif architecture in ("DT", "NB", "RF", "ET"):
+                elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
                     results.append(model.score(batch, tf.convert_to_tensor(labels)))
             if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
                 avg_loss = 0
@@ -248,7 +248,7 @@ def evaluate(args_, model_):
                     avg_acc += acc_pred
                     avg_k3_acc += k3_acc
                 result = [avg_loss / len(results), avg_acc / len(results), avg_k3_acc / len(results)]
-            elif architecture in ("DT", "NB", "RF", "ET", "Ensemble"):
+            elif architecture in ("DT", "NB", "RF", "ET", "Ensemble", "SVM", "kNN"):
                 avg_test_acc = 0
                 for acc in results:
                     avg_test_acc += acc
@@ -260,7 +260,7 @@ def evaluate(args_, model_):
                     print("%s (%d lines) test_loss: %f, test_accuracy: %f, test_k3_accuracy: %f (progress: %d%%)" % (
                         os.path.basename(path), len(batch) + dataset_cnt * args_.dataset_size, result[0], result[1], result[2], max(
                             int(cntr / len(dir_name) * 100), int(iterations / args_.max_iter) * 100)))
-                elif architecture in ("DT", "NB", "RF", "ET", "Ensemble"):
+                elif architecture in ("DT", "NB", "RF", "ET", "Ensemble", "SVM", "kNN"):
                     print("%s (%d lines) test_accuracy: %f (progress: %d%%)" % (
                         os.path.basename(path), len(batch) + dataset_cnt * args_.dataset_size, result,
                         max(int(cntr / len(dir_name) * 100), int(iterations / args_.max_iter) * 100)))
@@ -282,7 +282,7 @@ def evaluate(args_, model_):
         avg_test_acc_k3 = avg_test_acc_k3 / len(results_list)
         print("\n\nAverage evaluation results from %d iterations: avg_test_loss=%f, avg_test_acc=%f, avg_test_acc_k3=%f" % (
             iterations, avg_test_loss, avg_test_acc, avg_test_acc_k3))
-    elif architecture in ("DT", "NB", "RF", "ET", "Ensemble"):
+    elif architecture in ("DT", "NB", "RF", "ET", "Ensemble", "SVM", "kNN"):
         avg_test_acc = 0
         for acc in results_list:
             avg_test_acc += acc
@@ -339,7 +339,7 @@ def predict_single_line(args_, model_):
             for res in results[1:]:
                 result = np.add(result, res)
             result = np.divide(result, len(results))
-        elif architecture in ("DT", "NB", "RF", "ET"):
+        elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
             result = model_.predict_proba(tf.convert_to_tensor([statistics]))
         elif architecture == "Ensemble":
             result = model_.predict(tf.convert_to_tensor([statistics]), [ciphertext], args_.batch_size, verbose=0)
@@ -396,7 +396,7 @@ def load_model():
         model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy",
                        metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
         return model_
-    if architecture in ("DT", "NB", "RF", "ET"):
+    if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
         config.FEATURE_ENGINEERING = True
         config.PAD_INPUT = False
         global model_path
@@ -432,7 +432,7 @@ if __name__ == "__main__":
     parser.add_argument('--model', default='../data/models/m1.h5', type=str,
                         help='Name of the model file. The file must have the .h5 extension.')
     parser.add_argument('--architecture', default='FFNN', type=str, choices=[
-        'FFNN', 'CNN', 'LSTM', 'DT', 'NB', 'RF', 'ET', 'Transformer', 'Ensemble'],
+        'FFNN', 'CNN', 'LSTM', 'DT', 'NB', 'RF', 'ET', 'Transformer', 'SVM', 'kNN', 'Ensemble'],
         help='The architecture to be used for training. \n'
              'Possible values are:\n'
              '- FFNN\n'
@@ -443,6 +443,8 @@ if __name__ == "__main__":
              '- RF\n'
              '- ET\n'
              '- Transformer\n'
+             '- SVM\n'
+             '- kNN\n'
              '- Ensemble')
     parser.add_argument('--ciphers', '--ciphers', default='aca', type=str,
                         help='A comma seperated list of the ciphers to be created.\n'
@@ -605,7 +607,7 @@ if __name__ == "__main__":
             arch = args.architectures[i]
             if not os.path.exists(os.path.abspath(model)):
                 raise ValueError("Model in %s does not exist." % os.path.abspath(model))
-            if arch not in ('FFNN', 'CNN', 'LSTM', 'DT', 'NB', 'RF', 'ET', 'Transformer'):
+            if arch not in ('FFNN', 'CNN', 'LSTM', 'DT', 'NB', 'RF', 'ET', 'Transformer', 'SVM', 'kNN'):
                 raise ValueError("Unallowed architecture %s" % arch)
             if arch in ('FFNN', 'CNN', 'LSTM', 'Transformer') and not os.path.abspath(model).endswith('.h5'):
                 raise ValueError("Model names of the types %s must have the .h5 extension." % ['FFNN', 'CNN', 'LSTM', 'Transformer'])
