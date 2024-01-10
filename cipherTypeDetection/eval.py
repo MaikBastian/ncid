@@ -27,33 +27,26 @@ tf.debugging.set_log_device_placement(enabled=False)
 print = functools.partial(print, flush=True)
 
 
-architecture = None
-model_path = None
-model_list = None
-architecture_list = None
-strategy = None
-cipher_types = None
-
-
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
 
-def benchmark(args_, model_):
-    args_.plaintext_folder = os.path.abspath(args_.plaintext_folder)
-    if args_.dataset_size * args_.dataset_workers > args_.max_iter:
+def benchmark(args, model, architecture):
+    cipher_types = args.ciphers
+    args.plaintext_folder = os.path.abspath(args.plaintext_folder)
+    if args.dataset_size * args.dataset_workers > args.max_iter:
         print("ERROR: --dataset_size * --dataset_workers must not be bigger than --max_iter. In this case it was %d > %d" % (
-            args_.dataset_size * args_.dataset_workers, args_.max_iter), file=sys.stderr)
+            args.dataset_size * args.dataset_workers, args.max_iter), file=sys.stderr)
         sys.exit(1)
-    if args_.download_dataset and not os.path.exists(args_.plaintext_folder) and args_.plaintext_folder == os.path.abspath(
+    if args.download_dataset and not os.path.exists(args.plaintext_folder) and args.plaintext_folder == os.path.abspath(
             '../data/gutenberg_en'):
         print("Downloading Datsets...")
         tfds.download.add_checksums_dir('../data/checksums/')
-        download_manager = tfds.download.download_manager.DownloadManager(download_dir='../data/', extract_dir=args_.plaintext_folder)
+        download_manager = tfds.download.download_manager.DownloadManager(download_dir='../data/', extract_dir=args.plaintext_folder)
         download_manager.download_and_extract(
             'https://drive.google.com/uc?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V&export=download')
-        path = os.path.join(args_.plaintext_folder, 'ZIP.ucid_1bF5sSVjxTx-P5wxn87nxWn_V_export_downloadR9Cwhunev5CvJ-ic__'
-                                                    'HawxhTtGOlSdcCrro4fxfEI8A', os.path.basename(args_.plaintext_folder))
+        path = os.path.join(args.plaintext_folder, 'ZIP.ucid_1bF5sSVjxTx-P5wxn87nxWn_V_export_downloadR9Cwhunev5CvJ-ic__'
+                                                    'HawxhTtGOlSdcCrro4fxfEI8A', os.path.basename(args.plaintext_folder))
         dir_nam = os.listdir(path)
         for name in dir_nam:
             p = Path(os.path.join(path, name))
@@ -70,13 +63,13 @@ def benchmark(args_, model_):
             raise Exception(f"Filename must equal one of the expected cipher types. Expected cipher types are: {cipher_types}. Current filename is '{file_name}'.")
         
     plaintext_files = []
-    dir_nam = os.listdir(args_.plaintext_folder)
+    dir_nam = os.listdir(args.plaintext_folder)
     for name in dir_nam:
-        path = os.path.join(args_.plaintext_folder, name)
+        path = os.path.join(args.plaintext_folder, name)
         if os.path.isfile(path):
             plaintext_files.append(path)
 
-    rotor_cipher_dir = args_.rotor_ciphertext_folder
+    rotor_cipher_dir = args.rotor_ciphertext_folder
     rotor_ciphertexts = []
     dir_name = os.listdir(rotor_cipher_dir)
     for name in dir_name:
@@ -89,27 +82,32 @@ def benchmark(args_, model_):
                 for line in lines:
                     rotor_ciphertexts.append((line.rstrip(), label))
     
-    rotor_dataset_size = (args_.dataset_size // len(config.CIPHER_TYPES)) * 4
+    # Calculate batch size for rotor ciphers. The amount of samples per rotor cipher should be
+    # equal to the amount of samples per aca cipher.
+    number_of_rotor_ciphers = len(config.ROTOR_CIPHER_TYPES)
+    number_of_aca_ciphers = len(config.CIPHER_TYPES) - number_of_rotor_ciphers
+    amount_of_samples_per_cipher = args.dataset_size // number_of_aca_ciphers
+    rotor_train_dataset_size = amount_of_samples_per_cipher * number_of_rotor_ciphers
 
     plaintext_dataset_params = PlaintextPathsDatasetParameters(plaintext_files, 
                                                                cipher_types, 
-                                                               args_.dataset_size, 
-                                                               args_.min_text_len, 
-                                                               args_.max_text_len,
-                                                               args_.keep_unknown_symbols, 
-                                                               args_.dataset_workers, 
+                                                               args.dataset_size, 
+                                                               args.min_text_len, 
+                                                               args.max_text_len,
+                                                               args.keep_unknown_symbols, 
+                                                               args.dataset_workers, 
                                                                generate_evaluation_data=True)
     rotor_dataset_params = RotorCiphertextsDatasetParameters(rotor_ciphertexts, 
                                                             config.ROTOR_CIPHER_TYPES, 
-                                                            rotor_dataset_size,
-                                                            args_.dataset_workers, 
-                                                            args_.min_text_len, 
-                                                            args_.max_text_len,
+                                                            rotor_train_dataset_size,
+                                                            args.dataset_workers, 
+                                                            args.min_text_len, 
+                                                            args.max_text_len,
                                                             generate_evalutation_data=True)
     dataset = CipherStatisticsDataset(plaintext_dataset_params, rotor_dataset_params, 
                                       generate_evaluation_data=True)
 
-    if args_.dataset_size % dataset.key_lengths_count != 0:
+    if args.dataset_size % dataset.key_lengths_count != 0:
         print("WARNING: the --dataset_size parameter must be dividable by the amount of --ciphers  and the length configured KEY_LENGTHS in"
               " config.py. The current key_lengths_count is %d" % dataset.key_lengths_count, file=sys.stderr)
     print("Datasets loaded.\n")
@@ -120,31 +118,31 @@ def benchmark(args_, model_):
     iteration = 0
     epoch = 0
     results = []
-    while dataset.iteration < args_.max_iter:
+    while dataset.iteration < args.max_iter:
         batches = next(dataset)
         
         for index, batch in enumerate(batches):
             statistics, labels, ciphertexts = batch.tuple()
             
             if architecture == "FFNN":
-                results.append(model_.evaluate(statistics, labels, batch_size=args_.batch_size, verbose=1))
+                results.append(model.evaluate(statistics, labels, batch_size=args.batch_size, verbose=1))
             if architecture in ("CNN", "LSTM", "Transformer"):
-                results.append(model_.evaluate(ciphertexts, labels, batch_size=args_.batch_size, verbose=1))
+                results.append(model.evaluate(ciphertexts, labels, batch_size=args.batch_size, verbose=1))
             elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
-                results.append(model_.score(statistics, labels))
+                results.append(model.score(statistics, labels))
                 print("accuracy: %f" % (results[-1]))
             elif architecture == "Ensemble":
-                results.append(model_.evaluate(statistics, ciphertexts, labels, args_.batch_size, verbose=1))
+                results.append(model.evaluate(statistics, ciphertexts, labels, args.batch_size, verbose=1))
 
             iteration = dataset.iteration - len(batch) * (len(batches) - index - 1)
             epoch = dataset.epoch
             if epoch > 0:
                 epoch = iteration // (dataset.iteration // dataset.epoch)
             print("Epoch: %d, Iteration: %d" % (epoch, iteration))
-            if iteration >= args_.max_iter:
+            if iteration >= args.max_iter:
                 break
 
-        if dataset.iteration >= args_.max_iter:
+        if dataset.iteration >= args.max_iter:
             break
     elapsed_evaluation_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
     print('Finished evaluation in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
@@ -171,25 +169,25 @@ def benchmark(args_, model_):
         print("Average evaluation results from %d iterations: avg_test_acc=%f" % (iteration, avg_test_acc))
 
 
-def evaluate(args_, model_):
+def evaluate(args, model, architecture):
     results_list = []
-    dir_name = os.listdir(args_.data_folder)
+    dir_name = os.listdir(args.data_folder)
     dir_name.sort()
     cntr = 0
     iterations = 0
     for name in dir_name:
-        if iterations > args_.max_iter:
+        if iterations > args.max_iter:
             break
-        path = os.path.join(args_.data_folder, name)
+        path = os.path.join(args.data_folder, name)
         if os.path.isfile(path):
-            if iterations > args_.max_iter:
+            if iterations > args.max_iter:
                 break
             batch = []
             batch_ciphertexts = []
             labels = []
             results = []
             dataset_cnt = 0
-            input_length = get_model_input_length(model_, args_.architecture)
+            input_length = get_model_input_length(model, args.architecture)
             with open(path, "rb") as fd:
                 lines = fd.readlines()
             for line in lines:
@@ -210,17 +208,17 @@ def evaluate(args_, model_):
                         ciphertext = ciphertext[:input_length]
                 batch_ciphertexts.append(ciphertext)
                 iterations += 1
-                if iterations == args_.max_iter:
+                if iterations == args.max_iter:
                     break
-                if len(labels) == args_.dataset_size:
+                if len(labels) == args.dataset_size:
                     if architecture == "FFNN":
-                        results.append(model_.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(labels), args_.batch_size, verbose=0))
+                        results.append(model.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(labels), args.batch_size, verbose=0))
                     elif architecture in ("CNN", "LSTM", "Transformer"):
-                        results.append(model_.evaluate(tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels),
-                                       args_.batch_size, verbose=0))
+                        results.append(model.evaluate(tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels),
+                                       args.batch_size, verbose=0))
                     elif architecture == "Ensemble":
-                        results.append(model_.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels),
-                                       args_.batch_size, verbose=0))
+                        results.append(model.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels),
+                                       args.batch_size, verbose=0))
                     elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
                         results.append(model.score(batch, tf.convert_to_tensor(labels)))
                     batch = []
@@ -229,14 +227,14 @@ def evaluate(args_, model_):
                     dataset_cnt += 1
             if len(labels) > 0:
                 if architecture == "FFNN":
-                    results.append(model_.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(labels), args_.batch_size, verbose=0))
+                    results.append(model.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(labels), args.batch_size, verbose=0))
                 elif architecture in ("CNN", "LSTM", "Transformer"):
                     results.append(
-                        model_.evaluate(tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels), args_.batch_size, verbose=0))
+                        model.evaluate(tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels), args.batch_size, verbose=0))
                 elif architecture == "Ensemble":
                     results.append(
-                        model_.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels),
-                                        args_.batch_size, verbose=0))
+                        model.evaluate(tf.convert_to_tensor(batch), tf.convert_to_tensor(batch_ciphertexts), tf.convert_to_tensor(labels),
+                                        args.batch_size, verbose=0))
                 elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
                     results.append(model.score(batch, tf.convert_to_tensor(labels)))
             if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
@@ -255,18 +253,18 @@ def evaluate(args_, model_):
                 result = avg_test_acc / len(results)
             results_list.append(result)
             cntr += 1
-            if args_.evaluation_mode == 'per_file':
+            if args.evaluation_mode == 'per_file':
                 if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
                     print("%s (%d lines) test_loss: %f, test_accuracy: %f, test_k3_accuracy: %f (progress: %d%%)" % (
-                        os.path.basename(path), len(batch) + dataset_cnt * args_.dataset_size, result[0], result[1], result[2], max(
-                            int(cntr / len(dir_name) * 100), int(iterations / args_.max_iter) * 100)))
+                        os.path.basename(path), len(batch) + dataset_cnt * args.dataset_size, result[0], result[1], result[2], max(
+                            int(cntr / len(dir_name) * 100), int(iterations / args.max_iter) * 100)))
                 elif architecture in ("DT", "NB", "RF", "ET", "Ensemble", "SVM", "kNN"):
                     print("%s (%d lines) test_accuracy: %f (progress: %d%%)" % (
-                        os.path.basename(path), len(batch) + dataset_cnt * args_.dataset_size, result,
-                        max(int(cntr / len(dir_name) * 100), int(iterations / args_.max_iter) * 100)))
+                        os.path.basename(path), len(batch) + dataset_cnt * args.dataset_size, result,
+                        max(int(cntr / len(dir_name) * 100), int(iterations / args.max_iter) * 100)))
             else:
                 print_progress("Evaluating files: ", cntr, len(dir_name), factor=5)
-            if iterations == args_.max_iter:
+            if iterations == args.max_iter:
                 break
 
     if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
@@ -290,15 +288,15 @@ def evaluate(args_, model_):
         print("\n\nAverage evaluation results from %d iterations: avg_test_acc=%f" % (iterations, avg_test_acc))
 
 
-def predict_single_line(args_, model_):
-    config.CIPHER_TYPES = args_.ciphers
+def predict_single_line(args, model, architecture):
+    config.CIPHER_TYPES = args.ciphers
     cipher_id_result = ''
     ciphertexts = []
     result = []
-    if args_.ciphertext is not None:
-        ciphertexts.append(args_.ciphertext.encode())
+    if args.ciphertext is not None:
+        ciphertexts.append(args.ciphertext.encode())
     else:
-        ciphertexts = open(args_.file, 'rb')
+        ciphertexts = open(args.file, 'rb')
 
     print()
     for line in ciphertexts:
@@ -321,28 +319,28 @@ def predict_single_line(args_, model_):
             continue
         results = None
         if architecture == "FFNN":
-            result = model_.predict(tf.convert_to_tensor([statistics]), args_.batch_size, verbose=0)
+            result = model.predict(tf.convert_to_tensor([statistics]), args.batch_size, verbose=0)
         elif architecture in ("CNN", "LSTM", "Transformer"):
-            input_length = get_model_input_length(model_, architecture)
+            input_length = get_model_input_length(model, architecture)
             if len(ciphertext) < input_length:
                 ciphertext = pad_sequences([list(ciphertext)], maxlen=input_length)[0]
             split_ciphertext = [ciphertext[input_length*j:input_length*(j+1)] for j in range(len(ciphertext) // input_length)]
             results = []
             if architecture in ("LSTM", "Transformer"):
                 for ct in split_ciphertext:
-                    results.append(model_.predict(tf.convert_to_tensor([ct]), args_.batch_size, verbose=0))
+                    results.append(model.predict(tf.convert_to_tensor([ct]), args.batch_size, verbose=0))
             elif architecture == "CNN":
                 for ct in split_ciphertext:
                     results.append(
-                        model_.predict(tf.reshape(tf.convert_to_tensor([ct]), (1, input_length, 1)), args_.batch_size, verbose=0))
+                        model.predict(tf.reshape(tf.convert_to_tensor([ct]), (1, input_length, 1)), args.batch_size, verbose=0))
             result = results[0]
             for res in results[1:]:
                 result = np.add(result, res)
             result = np.divide(result, len(results))
         elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
-            result = model_.predict_proba(tf.convert_to_tensor([statistics]))
+            result = model.predict_proba(tf.convert_to_tensor([statistics]))
         elif architecture == "Ensemble":
-            result = model_.predict(tf.convert_to_tensor([statistics]), [ciphertext], args_.batch_size, verbose=0)
+            result = model.predict(tf.convert_to_tensor([statistics]), [ciphertext], args.batch_size, verbose=0)
 
         if isinstance(result, list):
             result_list = result[0]
@@ -351,8 +349,8 @@ def predict_single_line(args_, model_):
         if results is not None and architecture not in ('Ensemble', 'LSTM', 'Transformer', 'CNN'):
             for j in range(len(result_list)):
                 result_list[j] /= len(results)
-        if args_.verbose:
-            for cipher in args_.ciphers:
+        if args.verbose:
+            for cipher in args.ciphers:
                 print("{:23s} {:f}%".format(cipher, result_list[config.CIPHER_TYPES.index(cipher)]*100))
             max_val = max(result_list)
             cipher = config.CIPHER_TYPES[result_list.index(max_val)]
@@ -363,19 +361,22 @@ def predict_single_line(args_, model_):
         print()
         cipher_id_result += cipher[0].upper()
 
-    if args_.file is not None:
+    if args.file is not None:
         ciphertexts.close()
 
     # return a list of probabilities (does only return the last one in case a file is used)
     res_dict = {}
     if len(result) != 0:
         for j, val in enumerate(result[0]):
-            res_dict[args_.ciphers[j]] = val * 100
+            res_dict[args.ciphers[j]] = val * 100
     return res_dict
 
 
-def load_model():
-    global architecture
+def load_model(architecture, args, model_path, cipher_types):
+    strategy = args.strategy
+    model_list = args.models
+    architecture_list = args.architectures
+
     if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
         if architecture == 'Transformer':
             if not hasattr(config, "maxlen"):
@@ -399,14 +400,9 @@ def load_model():
     if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
         config.FEATURE_ENGINEERING = True
         config.PAD_INPUT = False
-        global model_path
         with open(model_path, "rb") as f:
             return pickle.load(f)
     if architecture == 'Ensemble':
-        global model_list
-        global architecture_list
-        global strategy
-        global cipher_types
         cipher_indices = []
         for cipher_type in cipher_types:
             cipher_indices.append(config.CIPHER_TYPES.index(cipher_type))
@@ -414,8 +410,24 @@ def load_model():
     else:
         raise ValueError("Unknown architecture: %s" % architecture)
 
+def expand_cipher_groups(cipher_types):
+    """Turn cipher group identifiers (ACA, MTC3) into a list of their ciphers"""
+    expanded = cipher_types
+    if config.MTC3 in expanded:
+        del expanded[expanded.index(config.MTC3)]
+        for i in range(5):
+            expanded.append(config.CIPHER_TYPES[i])
+    elif config.ACA in expanded:
+        del expanded[expanded.index(config.ACA)]
+        for i in range(56):
+            expanded.append(config.CIPHER_TYPES[i])
+    elif "aca+rotor" in expanded:
+        del expanded[expanded.index("aca+rotor")]
+        for i in range(61):
+            expanded.append(config.CIPHER_TYPES[i])
+    return expanded
 
-if __name__ == "__main__":
+def parse_arguments():
     parser = argparse.ArgumentParser(
         description='CANN Ciphertype Detection Neuronal Network Evaluation Script', formatter_class=argparse.RawTextHelpFormatter)
     sp = parser.add_subparsers()
@@ -454,6 +466,7 @@ if __name__ == "__main__":
                              '        Columnar Transposition, Plaifair and Hill)\n'
                              '- aca (contains all currently implemented ciphers from \n'
                              '       https://www.cryptogram.org/resource-area/cipher-types/)\n'
+                             '- aca+rotor\n'
                              '- simple_substitution\n'
                              '- vigenere\n'
                              '- columnar_transposition\n'
@@ -518,7 +531,11 @@ if __name__ == "__main__":
     single_line_group.add_argument('--verbose', help='If true all predicted ciphers are printed. \n'
                                                      'If false only the most accurate prediction is printed.')
 
-    args = parser.parse_args()
+    return parser.parse_args()
+
+def main():
+    args = parse_arguments()
+
     for arg in vars(args):
         print("{:23s}= {:s}".format(arg, str(getattr(args, arg))))
     m = os.path.splitext(args.model)
@@ -530,72 +547,7 @@ if __name__ == "__main__":
     model_path = args.model
     args.ciphers = args.ciphers.lower()
     cipher_types = args.ciphers.split(',')
-    if config.MTC3 in cipher_types:
-        del cipher_types[cipher_types.index(config.MTC3)]
-        cipher_types.append(config.CIPHER_TYPES[0])
-        cipher_types.append(config.CIPHER_TYPES[1])
-        cipher_types.append(config.CIPHER_TYPES[2])
-        cipher_types.append(config.CIPHER_TYPES[3])
-        cipher_types.append(config.CIPHER_TYPES[4])
-    if config.ACA in cipher_types:
-        del cipher_types[cipher_types.index(config.ACA)]
-        cipher_types.append(config.CIPHER_TYPES[0])
-        cipher_types.append(config.CIPHER_TYPES[1])
-        cipher_types.append(config.CIPHER_TYPES[2])
-        cipher_types.append(config.CIPHER_TYPES[3])
-        cipher_types.append(config.CIPHER_TYPES[4])
-        cipher_types.append(config.CIPHER_TYPES[5])
-        cipher_types.append(config.CIPHER_TYPES[6])
-        cipher_types.append(config.CIPHER_TYPES[7])
-        cipher_types.append(config.CIPHER_TYPES[8])
-        cipher_types.append(config.CIPHER_TYPES[9])
-        cipher_types.append(config.CIPHER_TYPES[10])
-        cipher_types.append(config.CIPHER_TYPES[11])
-        cipher_types.append(config.CIPHER_TYPES[12])
-        cipher_types.append(config.CIPHER_TYPES[13])
-        cipher_types.append(config.CIPHER_TYPES[14])
-        cipher_types.append(config.CIPHER_TYPES[15])
-        cipher_types.append(config.CIPHER_TYPES[16])
-        cipher_types.append(config.CIPHER_TYPES[17])
-        cipher_types.append(config.CIPHER_TYPES[18])
-        cipher_types.append(config.CIPHER_TYPES[19])
-        cipher_types.append(config.CIPHER_TYPES[20])
-        cipher_types.append(config.CIPHER_TYPES[21])
-        cipher_types.append(config.CIPHER_TYPES[22])
-        cipher_types.append(config.CIPHER_TYPES[23])
-        cipher_types.append(config.CIPHER_TYPES[24])
-        cipher_types.append(config.CIPHER_TYPES[25])
-        cipher_types.append(config.CIPHER_TYPES[26])
-        cipher_types.append(config.CIPHER_TYPES[27])
-        cipher_types.append(config.CIPHER_TYPES[28])
-        cipher_types.append(config.CIPHER_TYPES[29])
-        cipher_types.append(config.CIPHER_TYPES[30])
-        cipher_types.append(config.CIPHER_TYPES[31])
-        cipher_types.append(config.CIPHER_TYPES[32])
-        cipher_types.append(config.CIPHER_TYPES[33])
-        cipher_types.append(config.CIPHER_TYPES[34])
-        cipher_types.append(config.CIPHER_TYPES[35])
-        cipher_types.append(config.CIPHER_TYPES[36])
-        cipher_types.append(config.CIPHER_TYPES[37])
-        cipher_types.append(config.CIPHER_TYPES[38])
-        cipher_types.append(config.CIPHER_TYPES[39])
-        cipher_types.append(config.CIPHER_TYPES[40])
-        cipher_types.append(config.CIPHER_TYPES[41])
-        cipher_types.append(config.CIPHER_TYPES[42])
-        cipher_types.append(config.CIPHER_TYPES[43])
-        cipher_types.append(config.CIPHER_TYPES[44])
-        cipher_types.append(config.CIPHER_TYPES[45])
-        cipher_types.append(config.CIPHER_TYPES[46])
-        cipher_types.append(config.CIPHER_TYPES[47])
-        cipher_types.append(config.CIPHER_TYPES[48])
-        cipher_types.append(config.CIPHER_TYPES[49])
-        cipher_types.append(config.CIPHER_TYPES[50])
-        cipher_types.append(config.CIPHER_TYPES[51])
-        cipher_types.append(config.CIPHER_TYPES[52])
-        cipher_types.append(config.CIPHER_TYPES[53])
-        cipher_types.append(config.CIPHER_TYPES[54])
-        cipher_types.append(config.CIPHER_TYPES[55])
-    args.ciphers = cipher_types
+    args.ciphers = expand_cipher_groups(cipher_types)
     if architecture == 'Ensemble':
         if not hasattr(args, 'models') or not hasattr(args, 'architectures'):
             raise ValueError("Please use the 'ensemble' subroutine if specifying the ensemble architecture.")
@@ -611,9 +563,6 @@ if __name__ == "__main__":
                 raise ValueError("Unallowed architecture %s" % arch)
             if arch in ('FFNN', 'CNN', 'LSTM', 'Transformer') and not os.path.abspath(model).endswith('.h5'):
                 raise ValueError("Model names of the types %s must have the .h5 extension." % ['FFNN', 'CNN', 'LSTM', 'Transformer'])
-        strategy = args.strategy
-        model_list = args.models
-        architecture_list = args.architectures
     elif args.models is not None or args.architectures is not None:
         raise ValueError("It is only allowed to use the --models and --architectures with the Ensemble architecture.")
 
@@ -626,15 +575,18 @@ if __name__ == "__main__":
     #         model = load_model()
     # else:
     #     model = load_model()
-    model = load_model()
+    model = load_model(architecture, args, model_path, cipher_types)
     print("Model Loaded.")
 
     # the program was started as in benchmark mode.
     if args.download_dataset is not None:
-        benchmark(args, model)
+        benchmark(args, model, architecture)
     # the program was started in single_line mode.
     elif args.ciphertext is not None or args.file is not None:
-        predict_single_line(args, model)
+        predict_single_line(args, model, architecture)
     # the program was started in prediction mode.
     else:
-        evaluate(args, model)
+        evaluate(args, model, architecture)
+
+if __name__ == "__main__":
+    main()
