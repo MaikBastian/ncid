@@ -21,6 +21,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, matthews_corrcoef, classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 from datetime import datetime
 # This environ variable must be set before all tensorflow imports!
@@ -671,6 +672,10 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
     test_iter = 0
     test_epoch = 0
 
+    # sample all predictions and labels for later use
+    predicted_labels = []
+    true_labels = []
+
     while test_ds.iteration < args.max_iter:
         training_batches = next(test_ds)
 
@@ -688,8 +693,13 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
                 prediction = model[0].predict_proba(statistics)
             else:
                 prediction = model.predict(statistics, batch_size=args.batch_size, verbose=1)
+
             for i in range(len(prediction)):
-                if labels[i] == np.argmax(prediction[i]):
+                max_prediction = np.argmax(prediction[i])
+                predicted_labels.append(max_prediction)
+                true_labels.append(labels[i])
+
+                if labels[i] == max_prediction:
                     correct_all += 1
                     correct[labels[i]] += 1
                 else:
@@ -721,6 +731,17 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
     else:
         t = str(correct_all / total_len_prediction)
     print('Total: %s\n' % t)
+
+    # further stats
+    accuracy = accuracy_score(true_labels, predicted_labels)
+    precision = precision_score(true_labels, predicted_labels, average=None)
+    recall = recall_score(true_labels, predicted_labels, average=None)
+    f1 = f1_score(true_labels, predicted_labels, average=None)
+    mcc = matthews_corrcoef(true_labels, predicted_labels)
+    print(f"accuracy: {accuracy}", f"precision: {precision}", f"recall: {recall}", 
+            f"f1: {f1}", f"mcc: {mcc}", sep="\n")
+    
+    print(classification_report(true_labels, predicted_labels, digits=3))
 
     prediction_stats = 'Prediction time: %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.' % (
         elapsed_prediction_time.days, elapsed_prediction_time.seconds // 3600, 
