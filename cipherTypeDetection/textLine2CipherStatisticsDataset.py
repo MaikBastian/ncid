@@ -1312,6 +1312,10 @@ def calculate_cipher_sequence(line):
     Unknown mappings are converted to `config.UNKNOWN_SYMBOL_NUMBER`."""
     feature_length = 100
     result = []
+
+    # ensure that the length of `line` matches `feature_length`
+    while len(line) < feature_length:
+        line = np.concatenate((line, line))
     line = line[:feature_length]
 
     for char in line:
@@ -1320,8 +1324,6 @@ def calculate_cipher_sequence(line):
         else:
             result.append(config.UNKNOWN_SYMBOL_NUMBER)
 
-    # TODO: Correct solution? Is there something in the paper regarding ciphers of
-    #       different lengths?
     missing = feature_length - len(result)
     for i in range(missing):
         result.append(config.UNKNOWN_SYMBOL_NUMBER)
