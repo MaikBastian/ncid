@@ -50,15 +50,12 @@ from cipherTypeDetection.rotorCipherEnsemble import RotorCipherEnsemble
 from types import SimpleNamespace
 import pandas as pd
 
-architecture = None
-
 
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
 
-def create_model(extend_model, cipher_types):
-    global architecture
+def create_model(architecture, extend_model, cipher_types):
     optimizer = Adam(
         learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, 
         epsilon=config.epsilon, amsgrad=config.amsgrad)
@@ -419,7 +416,7 @@ def load_datasets_from_disk(args, cipher_types):
     print("Datasets loaded.\n")
     return train_ds, test_ds
     
-def create_model_with_distribution_strategy(extend_model, cipher_types):
+def create_model_with_distribution_strategy(architecture, extend_model, cipher_types):
     """Creates models depending on the GPU count and on extend_model"""
     print('Creating model...')
 
@@ -430,13 +427,13 @@ def create_model_with_distribution_strategy(extend_model, cipher_types):
         with strategy.scope():
             if extend_model is not None:
                 extend_model = tf.keras.models.load_model(extend_model, compile=False)
-            model = create_model(extend_model, cipher_types)
+            model = create_model(architecture, extend_model, cipher_types)
         if architecture in ("FFNN", "CNN", "LSTM", "Transformer") and extend_model is None:
             model.summary()
     else:
         if extend_model is not None:
             extend_model = tf.keras.models.load_model(extend_model, compile=False)
-        model = create_model(extend_model, cipher_types)
+        model = create_model(architecture, extend_model, cipher_types)
         if architecture in ("FFNN", "CNN", "LSTM", "Transformer") and extend_model is None:
             model.summary()
 
@@ -474,6 +471,8 @@ def train_model(model, args, train_ds):
 
     print('Training model...')
     delete_previous_checkpoints()
+
+    architecture = args.architecture
 
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir='../data/logs', update_freq='epoch')
     early_stopping_callback = MiniBatchEarlyStopping(
@@ -607,6 +606,7 @@ def train_model(model, args, train_ds):
 def save_model(model, args):
     """Saves the model"""
     print('Saving model...')
+    architecture = args.architecture
     if not os.path.exists(args.save_directory):
         os.mkdir(args.save_directory)
     if args.model_name == 'm.h5':
@@ -650,6 +650,7 @@ def save_model(model, args):
 def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter):
     """Testing the predictions of the model"""
     print('Predicting test data...\n')
+    architecture = args.architecture
     start_time = time.time()
     correct = [0]*len(config.CIPHER_TYPES)
     total = [0]*len(config.CIPHER_TYPES)
@@ -763,8 +764,9 @@ def expand_cipher_groups(cipher_types):
             expanded.append(config.CIPHER_TYPES[i])
     return expanded
 
-def aca_pipeline(cipher_types):
+def aca_pipeline(args, cipher_types):
     extend_model = args.extend_model
+    architecture = args.architecture
     if extend_model is not None:
         if architecture not in ('FFNN', 'CNN', 'LSTM'):
             # TODO: Also holds for SVM, kNN?
@@ -790,7 +792,7 @@ def aca_pipeline(cipher_types):
     train_ds, test_ds = load_datasets_from_disk(args, cipher_types)
 
     # ACA ciphers
-    model = create_model_with_distribution_strategy(extend_model, cipher_types)
+    model = create_model_with_distribution_strategy(architecture, extend_model, cipher_types)
     early_stopping_callback, train_iter, training_stats = train_model(model, args, train_ds)
     save_model(model, args)
     prediction_stats, incorrect = predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
@@ -1116,7 +1118,7 @@ def features_from_prediction(prediction, cipher_types):
                 "percentage_of_probabilities_below_2_percent": percentage_of_probabilities_below_2_percent, 
                 "max_probability": max_probability, "index_of_max_prediction": max_prediction_index}
 
-if __name__ == "__main__":
+def main():
     # Don't fork processes to keep memory footprint low. 
     multiprocessing.set_start_method("spawn")
 
@@ -1147,11 +1149,12 @@ if __name__ == "__main__":
         aca_architectures = ("LSTM", "FFNN", "CNN", "RF", "ET", "DT", "NB", "Transformer", 
                              "SVM", "kNN", "[FFNN,NB]", "[DT,ET,RF,SVM,kNN]")
         if architecture in aca_architectures:
-            aca_pipeline(cipher_types)
+            aca_pipeline(args, cipher_types)
         elif architecture in ("SVM-Rotor", "kNN-Rotor", "RF-Rotor"):
             rotor_pipeline()
         else:
             print("Unknown architecture")
             sys.exit(1)
 
-    
+if __name__ == "__main__":
+    main()    
