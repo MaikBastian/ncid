@@ -366,8 +366,8 @@ def load_datasets_from_disk(args, cipher_types):
     dir_name = os.listdir(rotor_cipher_dir)
     for name in dir_name:
         path = os.path.join(rotor_cipher_dir, name)
-        validate_ciphertext_path(path, config.ROTOR_CIPHER_TYPES)
         if os.path.isfile(path):
+            validate_ciphertext_path(path, config.ROTOR_CIPHER_TYPES)
             with open(path, "r") as f:
                 label = Path(path).stem.lower()
                 lines = f.readlines()
