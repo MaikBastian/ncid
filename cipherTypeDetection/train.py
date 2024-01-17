@@ -666,7 +666,7 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
             prediction_dataset_factor -= 1
         args.max_iter = int(train_iter / prediction_dataset_factor)
     else:
-        while test_ds.dataset_workers * test_ds.batch_size > args.max_iter / prediction_dataset_factor:
+        while test_ds.dataset_workers * test_ds.batch_size > args.max_iter / prediction_dataset_factor and prediction_dataset_factor > 1:
             prediction_dataset_factor -= 1
         args.max_iter /= prediction_dataset_factor
     cntr = 0
