@@ -55,7 +55,7 @@ def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
 
-def create_model(architecture, extend_model, cipher_types):
+def create_model(architecture, extend_model, cipher_types, max_train_len):
     optimizer = Adam(
         learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, 
         epsilon=config.epsilon, amsgrad=config.amsgrad)
@@ -111,7 +111,7 @@ def create_model(architecture, extend_model, cipher_types):
         model_ = tf.keras.Sequential()
         model_.add(tf.keras.layers.Conv1D(
                    filters=config.filters, kernel_size=config.kernel_size, 
-                   input_shape=(args.max_train_len, 1), activation='relu'))
+                   input_shape=(max_train_len, 1), activation='relu'))
         for _ in range(config.layers - 1):
             model_.add(tf.keras.layers.Conv1D(filters=config.filters, kernel_size=config.kernel_size, activation='relu'))
         # model_.add(tf.keras.layers.Dropout(0.2))
@@ -126,7 +126,7 @@ def create_model(architecture, extend_model, cipher_types):
         config.FEATURE_ENGINEERING = False
         config.PAD_INPUT = True
         model_ = tf.keras.Sequential()
-        model_.add(tf.keras.layers.Embedding(56, 64, input_length=args.max_train_len))
+        model_.add(tf.keras.layers.Embedding(56, 64, input_length=max_train_len))
         # model_.add(tf.keras.layers.Dropout(0.2))
         model_.add(tf.keras.layers.LSTM(config.lstm_units))
         # model_.add(tf.keras.layers.Dropout(0.2))
@@ -164,7 +164,7 @@ def create_model(architecture, extend_model, cipher_types):
         config.FEATURE_ENGINEERING = False
         config.PAD_INPUT = True
         vocab_size = config.vocab_size
-        maxlen = args.max_train_len
+        maxlen = max_train_len
         embed_dim = config.embed_dim  # Embedding size for each token
         num_heads = config.num_heads  # Number of attention heads
         ff_dim = config.ff_dim  # Hidden layer size in feed forward network inside transformer
@@ -416,7 +416,7 @@ def load_datasets_from_disk(args, cipher_types):
     print("Datasets loaded.\n")
     return train_ds, test_ds
     
-def create_model_with_distribution_strategy(architecture, extend_model, cipher_types):
+def create_model_with_distribution_strategy(architecture, extend_model, cipher_types, max_train_len):
     """Creates models depending on the GPU count and on extend_model"""
     print('Creating model...')
 
@@ -427,13 +427,13 @@ def create_model_with_distribution_strategy(architecture, extend_model, cipher_t
         with strategy.scope():
             if extend_model is not None:
                 extend_model = tf.keras.models.load_model(extend_model, compile=False)
-            model = create_model(architecture, extend_model, cipher_types)
+            model = create_model(architecture, extend_model, cipher_types, max_train_len)
         if architecture in ("FFNN", "CNN", "LSTM", "Transformer") and extend_model is None:
             model.summary()
     else:
         if extend_model is not None:
             extend_model = tf.keras.models.load_model(extend_model, compile=False)
-        model = create_model(architecture, extend_model, cipher_types)
+        model = create_model(architecture, extend_model, cipher_types, max_train_len)
         if architecture in ("FFNN", "CNN", "LSTM", "Transformer") and extend_model is None:
             model.summary()
 
@@ -792,7 +792,8 @@ def aca_pipeline(args, cipher_types):
     train_ds, test_ds = load_datasets_from_disk(args, cipher_types)
 
     # ACA ciphers
-    model = create_model_with_distribution_strategy(architecture, extend_model, cipher_types)
+    model = create_model_with_distribution_strategy(architecture, extend_model, 
+                                                    cipher_types, args.max_train_len)
     early_stopping_callback, train_iter, training_stats = train_model(model, args, train_ds)
     save_model(model, args)
     prediction_stats, incorrect = predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
