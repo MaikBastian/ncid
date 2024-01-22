@@ -144,3 +144,14 @@ class Cipher(metaclass=abc.ABCMeta):
         if not keep_unknown_symbols:
             return remove_unknown_symbols(plaintext, self.alphabet)
         return plaintext
+
+    @property
+    def needs_plaintext_of_specific_length(self):
+        """Indicates whether the cipher needs a plaintext of a specific length. Should
+        be overridden by subclasses that need their plaintext input to be of specific length."""
+        return False
+    
+    def truncate_plaintext(self, plaintext, key_length):
+        """Returns the plaintext truncated to a specific length, possibly depending
+        on `key_length`. Should be overridden by subclasses."""
+        raise Exception('Interface method called')

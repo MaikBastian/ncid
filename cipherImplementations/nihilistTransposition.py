@@ -48,3 +48,10 @@ class NihilistTransposition(Cipher):
                 plaintext[position + np.where(key == i)[0][0]] = columnar_ct[cntr]
                 cntr += 1
         return np.array(plaintext)
+
+    @property
+    def needs_plaintext_of_specific_length(self):
+        return True
+    
+    def truncate_plaintext(self, plaintext, key_length):
+        return plaintext[:key_length * key_length]

@@ -64,3 +64,10 @@ class Cadenus(Cipher):
         for i in range(len(pt_table)):
             plaintext += pt_table[i]
         return np.array(plaintext)
+    
+    @property
+    def needs_plaintext_of_specific_length(self):
+        return True
+    
+    def truncate_plaintext(self, plaintext, key_length):
+        return plaintext[:key_length * 25]

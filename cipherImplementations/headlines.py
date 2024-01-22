@@ -54,3 +54,13 @@ class Headlines(Cipher):
                 plaintext.append(space_index)
                 cnt += 1
         return np.array(plaintext)
+
+    @property
+    def needs_plaintext_of_specific_length(self):
+        return True
+    
+    def truncate_plaintext(self, plaintext, key_length):
+        space_index = self.alphabet.index(b' ')
+        spaces = np.count_nonzero(plaintext == space_index)
+        remainder = (len(plaintext) - spaces) % 5
+        return plaintext[:len(plaintext) - remainder]

@@ -73,3 +73,11 @@ class RouteTransposition(Cipher):
 
     def decrypt(self, ciphertext, key):
         raise Exception('not implemented yet...')
+
+    @property
+    def needs_plaintext_of_specific_length(self):
+        return True
+    
+    def truncate_plaintext(self, plaintext, key_length):
+        remainder = len(plaintext) % key_length
+        return plaintext[:len(plaintext) - remainder]
