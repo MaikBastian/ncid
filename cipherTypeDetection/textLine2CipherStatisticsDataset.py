@@ -1339,6 +1339,8 @@ def digrams():
 def encrypt(plaintext, label, key_length, keep_unknown_symbols, return_key=False):
     cipher = config.CIPHER_IMPLEMENTATIONS[label]
     plaintext = cipher.filter(plaintext, keep_unknown_symbols)
+    if cipher.needs_plaintext_of_specific_length:
+        plaintext = cipher.truncate_plaintext(plaintext, key_length)
     key = cipher.generate_random_key(key_length)
     if return_key:
         orig_key = copy.deepcopy(key)
