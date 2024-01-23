@@ -646,19 +646,124 @@ def save_model(model, args):
             print(f"Could not remove logs of previous run. Move of current logs "
                   f"from '../data/logs' to '{logs_destination}' failed.")
     print('Model saved.\n')
+
+class PredictionPerformanceMetrics:
+    def __init__(self, *, model_name):
+        self.model_name = model_name
+        self.true_labels = []
+        self.predicted_labels = []
+
+        self.correct = [0]*len(config.CIPHER_TYPES)
+        self.correct_k3 = [0] * len(config.CIPHER_TYPES)
+        self.total = [0]*len(config.CIPHER_TYPES)
+        self.correct_all = 0
+        self.correct_all_k3 = 0
+        self.total_len_prediction = 0
+        self.incorrect = []
+        for i in range(len(config.CIPHER_TYPES)):
+            self.incorrect += [[0]*len(config.CIPHER_TYPES)]
+        
+    def add_prediction(self, true_labels, predicted_probabilities):
+        # get the max predicted label from predicted_probabilites
+        predicted_labels = []
+        for probabilities in predicted_probabilities:
+            predicted_labels.append(np.argmax(probabilities))
+
+        # save correct and incorrect predictions per label for evaluation
+        for i in range(len(predicted_labels)):
+            if true_labels[i] == predicted_labels[i]:
+                self.correct_all += 1
+                self.correct[true_labels[i]] += 1
+            else:
+                self.incorrect[true_labels[i]][predicted_labels[i]] += 1
+            self.total[true_labels[i]] += 1
+
+            max_3_predictions = np.flip(np.argsort(predicted_probabilities[i]))[:3]
+            if true_labels[i] in max_3_predictions:
+                self.correct_all_k3 += 1
+                self.correct_k3[true_labels[i]] += 1
+        
+        self.total_len_prediction += len(predicted_probabilities)
+
+        # also save true and predicted labels for evaluation
+        self.true_labels.extend(true_labels)
+        self.predicted_labels.extend(predicted_labels)
+
+    def evaluate(self):
+        accuracy = accuracy_score(self.true_labels, self.predicted_labels)
+        cm = confusion_matrix(self.true_labels, self.predicted_labels)
+
+        accuracy_per_class = [0] * len(config.CIPHER_TYPES)
+
+        # accuracy_per_class based upon: https://stackoverflow.com/a/65673016
+        #
+        # Calculate the accuracy for each one of our classes
+        for idx in range(len(config.CIPHER_TYPES)):
+            # True negatives are all the samples that are not our current GT class (not the current row) 
+            # and were not predicted as the current class (not the current column)
+            true_negatives = np.sum(np.delete(np.delete(cm, idx, axis=0), idx, axis=1))
+            
+            # True positives are all the samples of our current GT class that were predicted as such
+            true_positives = cm[idx, idx]
+            
+            # The accuracy for the current class is the ratio between correct predictions to all predictions
+            accuracy_per_class[idx] = (true_positives + true_negatives) / np.sum(cm)
+
+        precision = precision_score(self.true_labels, self.predicted_labels, average=None)
+        recall = recall_score(self.true_labels, self.predicted_labels, average=None)
+        f1 = f1_score(self.true_labels, self.predicted_labels, average=None)
+        mcc = matthews_corrcoef(self.true_labels, self.predicted_labels)
+
+        print(f"Metrics of {self.model_name}:\n")
+
+        self._print_correct_predictions_per_cipher()
+        self._print_correct_k3_predictions_per_cipher()
+
+        print(f"accuracy: {accuracy}", 
+              f"accuracy per class: {accuracy_per_class}", 
+              f"precision: {precision}", 
+              f"recall: {recall}", 
+              f"f1: {f1}", 
+              f"mcc: {mcc}", 
+              sep="\n")
+        
+        print(classification_report(self.true_labels, self.predicted_labels, digits=3))
+
+        print(f"Confusion matrix: \n{list(cm)}")
+        print("\n\n")
     
+    def _print_correct_predictions_per_cipher(self):
+        print("Correct predictions per cipher:")
+        for i in range(0, len(self.total)):
+            if self.total[i] == 0:
+                continue
+            print('%s correct: %d/%d = %f' % (config.CIPHER_TYPES[i], self.correct[i], self.total[i], self.correct[i] / self.total[i]))
+
+        if self.total_len_prediction == 0:
+            t = 'N/A'
+        else:
+            t = str(self.correct_all / self.total_len_prediction)
+        print('Total: %s\n' % t)
+    
+    def _print_correct_k3_predictions_per_cipher(self):
+        print("Correct prediction in top 3:")
+        for i in range(0, len(self.total)):
+            if self.total[i] == 0:
+                continue
+            print('%s correct: %d/%d = %f' % (config.CIPHER_TYPES[i], self.correct_k3[i], self.total[i], self.correct_k3[i] / self.total[i]))
+        
+        if self.total_len_prediction == 0:
+            t = 'N/A'
+        else:
+            t = str(self.correct_all_k3 / self.total_len_prediction)
+        print('Total k3: %s\n' % t)
+
 def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter):
     """Testing the predictions of the model"""
     print('Predicting test data...\n')
     architecture = args.architecture
     start_time = time.time()
-    correct = [0]*len(config.CIPHER_TYPES)
-    total = [0]*len(config.CIPHER_TYPES)
-    correct_all = 0
     total_len_prediction = 0
-    incorrect = []
-    for i in range(len(config.CIPHER_TYPES)):
-        incorrect += [[0]*len(config.CIPHER_TYPES)]
 
     prediction_dataset_factor = 10
     if early_stopping_callback.stop_training:
@@ -674,8 +779,18 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
     test_epoch = 0
 
     # sample all predictions and labels for later use
-    predicted_labels = []
-    true_labels = []
+    prediction_metrics = {}
+    if architecture == "[FFNN,NB]":
+        prediction_metrics = {"FFNN": PredictionPerformanceMetrics(model_name="FFNN"),
+                              "NB": PredictionPerformanceMetrics(model_name="NB")}
+    elif architecture == "[DT,ET,RF,SVM,kNN]":
+        prediction_metrics = {"DT": PredictionPerformanceMetrics(model_name="DT"),
+                              "ET": PredictionPerformanceMetrics(model_name="ET"),
+                              "RF": PredictionPerformanceMetrics(model_name="RF"),
+                              "SVM": PredictionPerformanceMetrics(model_name="SVM"),
+                              "kNN": PredictionPerformanceMetrics(model_name="kNN"),}
+    else:
+        prediction_metrics = {architecture: PredictionPerformanceMetrics(model_name=architecture)}
 
     while test_ds.iteration < args.max_iter:
         training_batches = next(test_ds)
@@ -686,26 +801,23 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
             # Decision Tree, Naive Bayes prediction
             if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
                 prediction = model.predict_proba(statistics)
+                prediction_metrics[architecture].add_prediction(labels, prediction)
             elif architecture == "[FFNN,NB]":
                 prediction = model[0].predict(statistics, batch_size=args.batch_size, verbose=1)
+                nb_prediction = model[1].predict(statistics)
+                prediction_metrics["FFNN"].add_prediction(labels, prediction)
+                prediction_metrics["NB"].add_prediction(labels, nb_prediction)
             elif architecture == "[DT,ET,RF,SVM,kNN]":
-                # TODO: Altough in line with [FFNN,NB], is this reasonable or should prediction
-                # be a combination of all predictions?
                 prediction = model[0].predict_proba(statistics)
+                prediction_metrics["DT"].add_prediction(labels, prediction)
+                prediction_metrics["ET"].add_prediction(labels, model[1].predict_proba(statistics))
+                prediction_metrics["RF"].add_prediction(labels, model[2].predict_proba(statistics))
+                prediction_metrics["SVM"].add_prediction(labels, model[3].predict_proba(statistics))
+                prediction_metrics["kNN"].add_prediction(labels, model[4].predict_proba(statistics))
             else:
                 prediction = model.predict(statistics, batch_size=args.batch_size, verbose=1)
+                prediction_metrics[architecture].add_prediction(labels, prediction)
 
-            for i in range(len(prediction)):
-                max_prediction = np.argmax(prediction[i])
-                predicted_labels.append(max_prediction)
-                true_labels.append(labels[i])
-
-                if labels[i] == max_prediction:
-                    correct_all += 1
-                    correct[labels[i]] += 1
-                else:
-                    incorrect[labels[i]][np.argmax(prediction[i])] += 1
-                total[labels[i]] += 1
             total_len_prediction += len(prediction)
             cntr += 1
             test_iter = args.train_dataset_size * cntr
@@ -723,33 +835,17 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
     if total_len_prediction > args.train_dataset_size:
         total_len_prediction -= total_len_prediction % args.train_dataset_size
     print('\ntest data predicted: %d ciphertexts' % total_len_prediction)
-    for i in range(0, len(total)):
-        if total[i] == 0:
-            continue
-        print('%s correct: %d/%d = %f' % (config.CIPHER_TYPES[i], correct[i], total[i], correct[i] / total[i]))
-    if total_len_prediction == 0:
-        t = 'N/A'
-    else:
-        t = str(correct_all / total_len_prediction)
-    print('Total: %s\n' % t)
 
-    # further stats
-    accuracy = accuracy_score(true_labels, predicted_labels)
-    precision = precision_score(true_labels, predicted_labels, average=None)
-    recall = recall_score(true_labels, predicted_labels, average=None)
-    f1 = f1_score(true_labels, predicted_labels, average=None)
-    mcc = matthews_corrcoef(true_labels, predicted_labels)
-    print(f"accuracy: {accuracy}", f"precision: {precision}", f"recall: {recall}", 
-            f"f1: {f1}", f"mcc: {mcc}", sep="\n")
-    
-    print(classification_report(true_labels, predicted_labels, digits=3))
+    # print prediction metrics
+    for metrics in prediction_metrics.values():
+        metrics.evaluate()
 
     prediction_stats = 'Prediction time: %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.' % (
         elapsed_prediction_time.days, elapsed_prediction_time.seconds // 3600, 
         (elapsed_prediction_time.seconds // 60) % 60,
         elapsed_prediction_time.seconds % 60, test_iter, test_epoch)
     
-    return prediction_stats, incorrect
+    return prediction_stats
 
 def expand_cipher_groups(cipher_types):
     """Turn cipher group identifiers (ACA, MTC3) into a list of their ciphers"""
@@ -796,12 +892,10 @@ def aca_pipeline(args, cipher_types):
                                                     cipher_types, args.max_train_len)
     early_stopping_callback, train_iter, training_stats = train_model(model, args, train_ds)
     save_model(model, args)
-    prediction_stats, incorrect = predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
+    prediction_stats = predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
     
     print(training_stats)
     print(prediction_stats)
-
-    print("Incorrect prediction counts: %s" % incorrect)
 
 def rotor_pipeline():
     # create rotor models
