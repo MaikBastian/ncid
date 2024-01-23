@@ -1670,13 +1670,15 @@ class RotorCiphertextsDataset:
         self._batch_size = dataset_params.batch_size
         self._index = 0
         self._convert_lines_to_length(dataset_params.ciphertexts_with_labels, 
+                                      dataset_params.min_text_len,
                                       dataset_params.max_text_len)
         self._rearrange_ciphertexts()
         self._logger = logger
 
-    def _convert_lines_to_length(self, ciphertexts_with_labels, max_length):
-        """Convert lines so that their length equals `max_length`. The corresponding labels
-        (cipher types) of the ciphertext lines are kept after combining / truncating."""
+    def _convert_lines_to_length(self, ciphertexts_with_labels, min_length, max_length):
+        """Convert lines so that their length is between `min_length` and `max_length`. 
+        The corresponding labels (cipher types) of the ciphertext lines are kept after 
+        combining / truncating."""
         ciphertexts_with_labels = sorted(ciphertexts_with_labels, key=lambda elem: elem[1])
 
         # Samples stores a long string of all concatenated ciphertexts of the same label.
@@ -1698,8 +1700,11 @@ class RotorCiphertextsDataset:
         # Split the samples at `max_length` and append them into `results` with their labels
         results = []
         for index, sample in enumerate(samples):
-            for splitIndex in range(0, len(sample), max_length):
-                splitted = sample[splitIndex:splitIndex + max_length]
+            split_index = 0
+            while split_index < len(sample):
+                split_length = random.randint(min_length, max_length)
+                splitted = sample[split_index:split_index + split_length]
+                split_index += split_length
                 results.append((splitted, labels[index]))
 
         self._ciphertexts_with_labels = results
@@ -1802,10 +1807,13 @@ class PlaintextPathsDataset:
         for _ in range(number_of_lines):
             # use the basic prefilter to get the most accurate text length
             filtered_data = c.filter(next(self._dataset_iter).numpy(), self._keep_unknown_symbols)
-            while len(filtered_data) < self._min_text_len:
+            # Select a random min length of the filtered_data to provide more variance in the 
+            # resulting text length
+            random_min_length = random.randint(self._min_text_len, self._max_text_len)
+            while len(filtered_data) < random_min_length:
                 # add the new data to the existing to speed up the searching process.
                 filtered_data += c.filter(next(self._dataset_iter).numpy(), self._keep_unknown_symbols)
-            if len(filtered_data) > self._max_text_len != -1:
+            if len(filtered_data) > self._max_text_len:
                 result.append(filtered_data[:self._max_text_len-(self._max_text_len % 2)])
             else:
                 result.append(filtered_data[:len(filtered_data)-(len(filtered_data) % 2)])
