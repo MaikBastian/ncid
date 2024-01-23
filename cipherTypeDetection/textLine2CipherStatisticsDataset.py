@@ -1930,9 +1930,10 @@ class PlaintextLine2CipherStatisticsWorker:
                 for key_length in key_lengths:
                     try:
                         ciphertext = encrypt(line, index, key_length, self._keep_unknown_symbols)
-                    except ValueError:
-                        print(f"Could not encrypt line with cipher '{cipher_type}' "
-                              f"and key length {key_length}. Skipping line ...")
+                    except:
+                        multiprocessing_logger.error(f"Could not encrypt line with cipher "
+                                                     f"'{cipher_type}'. and key length {key_length}. "
+                                                     f"Skipping line...")
                         continue
                     if config.feature_engineering:
                         statistics = calculate_statistics(ciphertext)
