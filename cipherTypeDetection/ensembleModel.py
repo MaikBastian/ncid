@@ -105,69 +105,79 @@ class EnsembleModel:
             print("Accuracy: %f" % (correct_all / len(prediction)))
         return correct_all / len(prediction)
 
-    def predict(self, batch, ciphertexts, batch_size, verbose=0):
-        results = []
-        for i in range(len(self.models)):
-            if self.architectures[i] == "FFNN":
-                results.append(self.models[i].predict(batch, batch_size=batch_size, verbose=verbose))
-            elif self.architectures[i] in ("CNN", "LSTM", "Transformer"):
-                input_length = get_model_input_length(self.models[i], self.architectures[i])
+    def predict(self, statistics, ciphertexts, batch_size, verbose=0):
+        predictions = []
+        for index, model in enumerate(self.models):
+            architecture = self.architectures[index]
+            if architecture == "FFNN":
+                predictions.append(model.predict(statistics, batch_size=batch_size, verbose=verbose))
+            elif architecture in ("CNN", "LSTM", "Transformer"):
+                input_length = get_model_input_length(model, architecture)
                 if isinstance(ciphertexts, list):
                     split_ciphertexts = []
                     for ciphertext in ciphertexts:
                         if len(ciphertext) < input_length:
-                            ciphertext = pad_sequences([ciphertext], maxlen=input_length, padding='post', value=len(OUTPUT_ALPHABET))[0]
+                            ciphertext = pad_sequences([ciphertext], maxlen=input_length, 
+                                                       padding='post', 
+                                                       value=len(OUTPUT_ALPHABET))[0]
                         split_ciphertexts.append([ciphertext[input_length*j:input_length*(j+1)] for j in range(
                             len(ciphertext) // input_length)])
-                    split_results = []
-                    if self.architectures[i] in ("LSTM", "Transformer"):
+                    split_predictions = []
+                    if architecture in ("LSTM", "Transformer"):
                         for split_ciphertext in split_ciphertexts:
                             for ct in split_ciphertext:
-                                split_results.append(self.models[i].predict(tf.convert_to_tensor([ct]), batch_size=batch_size, verbose=verbose))
-                    elif self.architectures[i] == "CNN":
+                                split_predictions.append(model.predict(tf.convert_to_tensor([ct]), batch_size=batch_size, verbose=verbose))
+                    elif architecture == "CNN":
                         for split_ciphertext in split_ciphertexts:
                             for ct in split_ciphertext:
-                                split_results.append(self.models[i].predict(tf.reshape(tf.convert_to_tensor([ct]), (1, input_length, 1)),
+                                reshaped_ciphertext = tf.reshape(tf.convert_to_tensor([ct]), 
+                                                                 (1, input_length, 1))
+                                split_predictions.append(model.predict(reshaped_ciphertext,
                                                      batch_size=batch_size, verbose=0))
-                    res = split_results[0]
-                    for split_result in split_results[1:]:
-                        res = np.add(res, split_result)
-                    for j in range(len(res)):
-                        res[j] /= len(split_results)
-                    results.append(res)
+                    combined_prediction = split_predictions[0]
+                    for split_prediction in split_predictions[1:]:
+                        combined_prediction = np.add(combined_prediction, split_prediction)
+                    for j in range(len(combined_prediction)):
+                        combined_prediction[j] /= len(split_predictions)
+                    predictions.append(combined_prediction)
                 else:
-                    if self.architectures[i] in ("LSTM", "Transformer"):
-                        res = self.models[i].predict(ciphertexts, batch_size=batch_size, verbose=verbose)
-                    elif self.architectures[i] == "CNN":
-                        res = self.models[i].predict(tf.reshape(
-                            ciphertexts, (len(ciphertexts), input_length, 1)), batch_size=batch_size, verbose=verbose)
-                    results.append(res)
-            elif self.architectures[i] in ("DT", "NB", "RF", "ET"):
-                results.append(self.models[i].predict_proba(batch))
-        res = [[0.] * len(results[0][0]) for _ in range(len(results[0]))]
+                    if architecture in ("LSTM", "Transformer"):
+                        prediction = model.predict(ciphertexts, batch_size=batch_size, 
+                                                   verbose=verbose)
+                    elif architecture == "CNN":
+                        reshaped_ciphertexts = tf.reshape(ciphertexts, 
+                                                          (len(ciphertexts), input_length, 1))
+                        prediction = model.predict(reshaped_ciphertexts, batch_size=batch_size, 
+                                                   verbose=verbose)
+                    predictions.append(prediction)
+            elif architecture in ("DT", "NB", "RF", "ET"):
+                predictions.append(model.predict_proba(statistics))
+
+        scaled = [[0.] * len(predictions[0][0]) for _ in range(len(predictions[0]))]
         if self.strategy == 'mean':
-            for result in results:
-                for i in range(len(result)):
-                    for j in range(len(result[i])):
-                        res[i][j] += result[i][j]
-            for i in range(len(results[0])):
-                for j in range(len(results[0][0])):
-                    res[i][j] = res[i][j] / len(results)
+            for prediction in predictions:
+                for i in range(len(prediction)):
+                    for j in range(len(prediction[i])):
+                        scaled[i][j] += prediction[i][j]
+            for i in range(len(predictions[0])):
+                for j in range(len(predictions[0][0])):
+                    scaled[i][j] = scaled[i][j] / len(predictions)
         elif self.strategy == 'weighted':
-            for i in range(len(results)):
+            for i in range(len(predictions)):
                 statistics = self.statistics_dict[self.architectures[i]]
-                for j in range(len(results[i])):
-                    for k in range(len(results[i][j])):
-                        res[j][k] += results[i][j][k] * statistics[-1][k] / self.total_votes[k]
+                for j in range(len(predictions[i])):
+                    for k in range(len(predictions[i][j])):
+                        scaled[j][k] += predictions[i][j][k] * statistics[-1][k] / self.total_votes[k]
             factor = 0
-            for i in range(len(results[0])):
-                for j in range(len(results[0][i])):
-                    res[i][j] = res[i][j] / len(results)
-                    factor += res[i][j]
+            for i in range(len(predictions[0])):
+                for j in range(len(predictions[0][i])):
+                    scaled[i][j] = scaled[i][j] / len(predictions)
+                    factor += scaled[i][j]
             factor = 1 / factor
-            for i in range(len(results[0])):
-                for j in range(len(results[0][i])):
-                    res[i][j] *= factor
+            for i in range(len(predictions[0])):
+                for j in range(len(predictions[0][i])):
+                    scaled[i][j] *= factor
         else:
             raise ValueError("Unknown strategy %s" % self.strategy)
-        return res
+        
+        return scaled
