@@ -483,8 +483,13 @@ class CiphertextLine2CipherStatisticsWorker:
             label_index = config.cipher_types.index(label)
             labels.append(label_index)
             if config.feature_engineering:
-                feature = calculate_statistics(processed_line)
-                features.append(feature)
+                try:
+                    feature = calculate_statistics(processed_line)
+                    features.append(feature)
+                except:
+                    multiprocessing_logger.error("Error occured while calculating statistics "
+                                                 "for ciphertext. Skipping line...")
+                    continue
             else:
                 features.append(processed_line)
             if self._generate_evaluation_data:
@@ -556,8 +561,13 @@ class PlaintextLine2CipherStatisticsWorker:
                                                      f"Skipping line...")
                         continue
                     if config.feature_engineering:
-                        statistics = calculate_statistics(ciphertext)
-                        batch.append(statistics)
+                        try:
+                            statistics = calculate_statistics(ciphertext)
+                            batch.append(statistics)
+                        except:
+                            multiprocessing_logger.error("Error occured while calculating statistics "
+                                                         "for ciphertext. Skipping line...")
+                            continue
                     else:
                         batch.append(list(ciphertext))
                     if self._generate_evaluation_data:
