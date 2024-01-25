@@ -89,23 +89,21 @@ def benchmark(args, model, architecture):
     amount_of_samples_per_cipher = args.dataset_size // number_of_aca_ciphers
     rotor_train_dataset_size = amount_of_samples_per_cipher * number_of_rotor_ciphers
 
-    plaintext_dataset_params = PlaintextPathsDatasetParameters(plaintext_files, 
-                                                               cipher_types, 
+    plaintext_dataset_params = PlaintextPathsDatasetParameters(cipher_types, 
                                                                args.dataset_size, 
                                                                args.min_text_len, 
                                                                args.max_text_len,
                                                                args.keep_unknown_symbols, 
                                                                args.dataset_workers, 
                                                                generate_evaluation_data=True)
-    rotor_dataset_params = RotorCiphertextsDatasetParameters(rotor_ciphertexts, 
-                                                            config.ROTOR_CIPHER_TYPES, 
+    rotor_dataset_params = RotorCiphertextsDatasetParameters(config.ROTOR_CIPHER_TYPES, 
                                                             rotor_train_dataset_size,
                                                             args.dataset_workers, 
                                                             args.min_text_len, 
                                                             args.max_text_len,
                                                             generate_evalutation_data=True)
-    dataset = CipherStatisticsDataset(plaintext_dataset_params, rotor_dataset_params, 
-                                      generate_evaluation_data=True)
+    dataset = CipherStatisticsDataset(plaintext_files, plaintext_dataset_params, rotor_ciphertexts, 
+                                      rotor_dataset_params, generate_evaluation_data=True)
 
     if args.dataset_size % dataset.key_lengths_count != 0:
         print("WARNING: the --dataset_size parameter must be dividable by the amount of --ciphers  and the length configured KEY_LENGTHS in"

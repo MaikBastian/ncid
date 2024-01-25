@@ -339,21 +339,7 @@ def download_datasets(args):
     os.rmdir(os.path.dirname(path))
     print("Datasets Downloaded.")
 
-def load_datasets_from_disk(args, cipher_types):
-    """Loads datasets from the file system. 
-    In case of the ACA ciphers the datasets are plaintext files that need to be
-    encrypted before the features can be extracted.
-    In case of the rotor ciphers there are already encrypted ciphertext files 
-    that can directly be used to extract the features.
-    """
-    print("Loading Datasets...")
-    plaintext_files = []
-    dir_name = os.listdir(args.plaintext_input_directory)
-    for name in dir_name:
-        path = os.path.join(args.plaintext_input_directory, name)
-        if os.path.isfile(path):
-            plaintext_files.append(path)
-
+def load_rotor_ciphertext_datasets_from_disk(args, max_lines_per_cipher):
     def validate_ciphertext_path(ciphertext_path, cipher_types):
         file_name = Path(ciphertext_path).stem.lower()
         if not file_name in cipher_types:
@@ -369,21 +355,16 @@ def load_datasets_from_disk(args, cipher_types):
             with open(path, "r") as f:
                 label = Path(path).stem.lower()
                 lines = f.readlines()
+                max = max_lines_per_cipher
                 for line in lines:
+                    max -= 1
+                    if max <= 0:
+                        continue
                     rotor_ciphertexts.append((line.rstrip(), label))
-                    
-    train_plaintexts, test_plaintexts = train_test_split(plaintext_files, test_size=0.05, 
-                                                         random_state=42, shuffle=True)
+
     train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertexts, test_size=0.2, 
                                                                        random_state=42, shuffle=True)
 
-    train_plaintext_parameters = PlaintextPathsDatasetParameters(train_plaintexts, cipher_types, args.train_dataset_size, 
-                                                args.min_train_len, args.max_train_len,
-                                                args.keep_unknown_symbols, args.dataset_workers)
-    test_plaintext_parameters = PlaintextPathsDatasetParameters(test_plaintexts, cipher_types, args.train_dataset_size,     
-                                               args.min_test_len, args.max_test_len,
-                                               args.keep_unknown_symbols, args.dataset_workers)
-    
     # Calculate batch size for rotor ciphers. The amount of samples per rotor cipher should be
     # equal to the amount of samples per aca cipher.
     number_of_rotor_ciphers = len(config.ROTOR_CIPHER_TYPES)
@@ -391,23 +372,62 @@ def load_datasets_from_disk(args, cipher_types):
     amount_of_samples_per_cipher = args.train_dataset_size // number_of_aca_ciphers
     rotor_train_dataset_size = amount_of_samples_per_cipher * number_of_rotor_ciphers
 
-    train_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(train_rotor_ciphertexts, 
-                                                            config.ROTOR_CIPHER_TYPES, 
+    train_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(config.ROTOR_CIPHER_TYPES, 
                                                             rotor_train_dataset_size,
                                                             args.dataset_workers, 
                                                             args.min_train_len, 
                                                             args.max_train_len,
                                                             generate_evalutation_data=False)
-    test_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(test_rotor_ciphertexts, 
-                                                            config.ROTOR_CIPHER_TYPES,
+    test_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(config.ROTOR_CIPHER_TYPES,
                                                             rotor_train_dataset_size,
                                                             args.dataset_workers, 
                                                             args.min_test_len, 
                                                             args.max_test_len,
                                                             generate_evalutation_data=False)
     
-    train_ds = CipherStatisticsDataset(train_plaintext_parameters, train_rotor_ciphertexts_parameters)
-    test_ds = CipherStatisticsDataset(test_plaintext_parameters, test_rotor_ciphertexts_parameters)
+    return (train_rotor_ciphertexts, train_rotor_ciphertexts_parameters, 
+            test_rotor_ciphertexts, test_rotor_ciphertexts_parameters)
+
+def load_plaintext_datasets_from_disk(args, cipher_types):
+    plaintext_files = []
+    dir_name = os.listdir(args.plaintext_input_directory)
+    for name in dir_name:
+        path = os.path.join(args.plaintext_input_directory, name)
+        if os.path.isfile(path):
+            plaintext_files.append(path)
+    
+    train_plaintexts, test_plaintexts = train_test_split(plaintext_files, test_size=0.05, 
+                                                         random_state=42, shuffle=True)
+    
+    train_plaintext_parameters = PlaintextPathsDatasetParameters(cipher_types, args.train_dataset_size, 
+                                                args.min_train_len, args.max_train_len,
+                                                args.keep_unknown_symbols, args.dataset_workers)
+    test_plaintext_parameters = PlaintextPathsDatasetParameters(cipher_types, args.train_dataset_size,     
+                                               args.min_test_len, args.max_test_len,
+                                               args.keep_unknown_symbols, args.dataset_workers)
+    
+    return (train_plaintexts, train_plaintext_parameters, test_plaintexts, test_plaintext_parameters)
+
+def load_datasets_from_disk(args, cipher_types):
+    """Loads datasets from the file system. 
+    In case of the ACA ciphers the datasets are plaintext files that need to be
+    encrypted before the features can be extracted.
+    In case of the rotor ciphers there are already encrypted ciphertext files 
+    that can directly be used to extract the features.
+    """
+    print("Loading Datasets...")
+    
+    (train_plaintexts, 
+     train_plaintext_parameters, 
+     test_plaintexts, 
+     test_plaintext_parameters) = load_plaintext_datasets_from_disk(args, cipher_types)
+    (train_rotor_ciphertexts, 
+     train_rotor_ciphertexts_parameters, 
+     test_rotor_ciphertexts, 
+     test_rotor_ciphertexts_parameters) = load_rotor_ciphertext_datasets_from_disk(args, 3000)
+
+    train_ds = CipherStatisticsDataset(train_plaintexts, train_plaintext_parameters, train_rotor_ciphertexts, train_rotor_ciphertexts_parameters)
+    test_ds = CipherStatisticsDataset(test_plaintexts, test_plaintext_parameters, test_rotor_ciphertexts, test_rotor_ciphertexts_parameters)
 
     if args.train_dataset_size % train_ds.key_lengths_count != 0:
         print("WARNING: the --train_dataset_size parameter must be dividable by the amount of --ciphers  and the length configured "

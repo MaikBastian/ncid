@@ -93,8 +93,8 @@ class CipherStatisticsDataset:
     the `_processing_queue`.
     """
 
-    def __init__(self, plaintext_dataset_params, rotor_ciphertext_dataset_params, 
-                 generate_evaluation_data=False):
+    def __init__(self, plaintext_paths, plaintext_dataset_params, rotor_ciphertexts_with_labels, 
+                 rotor_ciphertext_dataset_params, *, generate_evaluation_data=False):
         assert plaintext_dataset_params.dataset_workers == rotor_ciphertext_dataset_params.dataset_workers
 
         dataset_workers = plaintext_dataset_params.dataset_workers
@@ -108,7 +108,9 @@ class CipherStatisticsDataset:
         self._processing_queue = deque() 
         self._logger = multiprocessing_logger
 
+        self._plaintext_paths = plaintext_paths
         self._plaintext_dataset_params = plaintext_dataset_params
+        self._rotor_ciphertexts_with_labels = rotor_ciphertexts_with_labels
         self._rotor_ciphertext_dataset_params = rotor_ciphertext_dataset_params
 
         self._initialize_datasets()
@@ -116,9 +118,10 @@ class CipherStatisticsDataset:
         self._generate_evaluation_data = generate_evaluation_data
     
     def _initialize_datasets(self):
-        self._plaintext_dataset = PlaintextPathsDataset(self._plaintext_dataset_params, 
+        self._plaintext_dataset = PlaintextPathsDataset(self._plaintext_paths, self._plaintext_dataset_params, 
                                                         self._logger)
-        self._ciphertext_dataset = RotorCiphertextsDataset(self._rotor_ciphertext_dataset_params, 
+        self._ciphertext_dataset = RotorCiphertextsDataset(self._rotor_ciphertexts_with_labels, 
+                                                           self._rotor_ciphertext_dataset_params, 
                                                            self._logger)
     
     @property
@@ -266,9 +269,8 @@ class RotorCiphertextsDatasetParameters:
     for the initialization of the dataset itself, as well as for the worker processes and
     the main statistics dataset."""
 
-    def __init__(self, ciphertexts_with_labels, cipher_types, batch_size, dataset_workers, 
+    def __init__(self, cipher_types, batch_size, dataset_workers, 
                  min_text_len, max_text_len, generate_evalutation_data):
-        self.ciphertexts_with_labels = ciphertexts_with_labels
         self.cipher_types = cipher_types
         self.batch_size = batch_size
         self.dataset_workers = dataset_workers
@@ -284,11 +286,11 @@ class RotorCiphertextsDataset:
     the samples of the different cipher types.
     The batching allows for splitting the input in workable chunks 
     (that fit in RAM) and can be distributed to multiple worker processes."""
-    def __init__(self, dataset_params, logger):
-        self._ciphertexts_with_labels = dataset_params.ciphertexts_with_labels
+    def __init__(self, ciphertexts_with_labels, dataset_params, logger):
+        self._ciphertexts_with_labels = ciphertexts_with_labels
         self._batch_size = dataset_params.batch_size
         self._index = 0
-        self._convert_lines_to_length(dataset_params.ciphertexts_with_labels, 
+        self._convert_lines_to_length(self._ciphertexts_with_labels, 
                                       dataset_params.min_text_len,
                                       dataset_params.max_text_len)
         self._rearrange_ciphertexts()
@@ -365,10 +367,9 @@ class PlaintextPathsDatasetParameters:
     for the initialization of the dataset itself, as well as for the worker processes and
     the main statistics dataset."""
 
-    def __init__(self, plaintext_paths, cipher_types, batch_size, min_text_len, max_text_len, 
+    def __init__(self, cipher_types, batch_size, min_text_len, max_text_len, 
                  keep_unknown_symbols=False, dataset_workers=None,
                  generate_evaluation_data=False):
-        self.plaintext_paths = plaintext_paths
         self.cipher_types = cipher_types
         self.batch_size = batch_size
         self.min_text_len = min_text_len
@@ -381,7 +382,7 @@ class PlaintextPathsDataset:
     """Takes paths to plaintexts and returns list of size `batch_size` with lines
     from the plaintext files."""
 
-    def __init__(self, dataset_params, logger):
+    def __init__(self, plaintext_paths, dataset_params, logger):
         self._batch_size = dataset_params.batch_size
         self._min_text_len = dataset_params.min_text_len
         self._max_text_len = dataset_params.max_text_len
@@ -399,7 +400,7 @@ class PlaintextPathsDataset:
                 key_lengths_count += 1
         self._key_lengths_count = key_lengths_count
 
-        self._plaintext_dataset = tf.data.TextLineDataset(dataset_params.plaintext_paths)
+        self._plaintext_dataset = tf.data.TextLineDataset(plaintext_paths)
         self._dataset_iter = self._plaintext_dataset.__iter__()
 
         self._index = 0
