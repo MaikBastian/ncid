@@ -54,7 +54,8 @@ class PredictionPerformanceMetrics:
     def print_evaluation(self):
         """Prints several evaluations of the collected metrics."""
         accuracy = accuracy_score(self.true_labels, self.predicted_labels)
-        cm = confusion_matrix(self.true_labels, self.predicted_labels)
+        cm = confusion_matrix(self.true_labels, self.predicted_labels, 
+                              labels=range(len(config.CIPHER_TYPES)))
 
         accuracy_per_class = [0] * len(config.CIPHER_TYPES)
 
