@@ -1,3 +1,4 @@
+import logging
 import multiprocessing
 from pathlib import Path
 
@@ -32,7 +33,8 @@ import tensorflow_datasets as tfds
 sys.path.append("../")
 import cipherTypeDetection.config as config
 from cipherImplementations.cipher import OUTPUT_ALPHABET
-from cipherTypeDetection.textLine2CipherStatisticsDataset import RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CipherStatisticsDataset, TrainingBatch
+from cipherTypeDetection.textLine2CipherStatisticsDataset import CiphertextLine2CipherStatisticsWorker, ConfigParams, RotorCiphertextsDataset, RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CipherStatisticsDataset, TrainingBatch
+from cipherTypeDetection.featureCalculations import calculate_histogram, calculate_digrams, calculate_cipher_sequence
 from cipherTypeDetection.predictionPerformanceMetrics import PredictionPerformanceMetrics
 from cipherTypeDetection.miniBatchEarlyStoppingCallback import MiniBatchEarlyStopping
 from cipherTypeDetection.transformer import TransformerBlock, TokenAndPositionEmbedding, MultiHeadSelfAttention
@@ -277,7 +279,7 @@ def parse_arguments():
                              'If this argument is set to -1 no upper limit is used.')
     parser.add_argument('--architecture', default='FFNN', type=str, 
                         choices=['FFNN', 'CNN', 'LSTM', 'DT', 'NB', 'RF', 'ET', 'Transformer',
-                                 'SVM', 'kNN', '[FFNN,NB]', '[DT,ET,RF,SVM,kNN]'],
+                                 'SVM', 'kNN', '[FFNN,NB]', '[DT,ET,RF,SVM,kNN]', 'SVM-Rotor'],
                         help='The architecture to be used for training. \n'
                              'Possible values are:\n'
                              '- FFNN\n'
@@ -292,6 +294,7 @@ def parse_arguments():
                              '- kNN\n'
                              '- [FFNN,NB]\n'
                              '- [DT,ET,RF,SVM,kNN]'
+                             '- SVM-Rotor'
                              )
     parser.add_argument('--extend_model', default=None, type=str,
                         help='Load a trained model from a file and use it as basis for the new training.')
@@ -639,7 +642,7 @@ def save_model(model, args):
     model_path = os.path.join(args.save_directory, model_name)
     if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
         model.save(model_path)
-    elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
+    elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN", "SVM-Rotor"):
         with open(model_path, "wb") as f:
             # this gets very large
             pickle.dump(model, f)
@@ -806,17 +809,83 @@ def aca_pipeline(args, cipher_types):
     print(training_stats)
     print(prediction_stats)
 
-def rotor_pipeline():
-    # create rotor models
+def rotor_pipeline(args):
+    # create model
+    model = SVC(probability=True, C=1, gamma=0.001, kernel="linear") # TODO: Correct hyperparameters?
 
-    # save rotor models
+    # load rotor ciphertexts from disk
+    (train_ciphertexts, 
+     train_ciphertexts_parameters, 
+     test_ciphertexts, 
+     test_ciphertexts_parameters) = load_rotor_ciphertext_datasets_from_disk(args, 1000)
 
-    pass
+    logger = multiprocessing.log_to_stderr(logging.INFO)
+    train_dataset = RotorCiphertextsDataset(train_ciphertexts, train_ciphertexts_parameters, logger)
+    test_dataset = RotorCiphertextsDataset(test_ciphertexts, test_ciphertexts_parameters, logger)
 
-# class PredictionResult:
-#     def __init__(self, prediction, cipher):
-#         self.prediction = prediction
-#         self.cipher = cipher
+    config_params = ConfigParams(config.CIPHER_TYPES, config.KEY_LENGTHS, config.FEATURE_ENGINEERING, config.PAD_INPUT)
+    
+    def process_ciphertext(ciphertext):
+        def map_text_into_numberspace(text):
+            alphabet = "abcdefghijklmnopqrstuvwxyz"
+            result = []
+            for index in range(len(text)):
+                try:
+                    result.append(alphabet.index(text[index]))
+                except ValueError:
+                    raise Exception(f"Ciphertext contains unknown character '{text[index]}'. "
+                                    f"Known characters are: '{alphabet}'.")
+            return result
+        cleaned = ciphertext.strip().replace(' ', '').replace('\n', '')
+        mapped = map_text_into_numberspace(cleaned.lower())
+        return mapped
+    
+    # get features from training ciphertexts
+    training_labels, training_statistics = [], []
+    for training_batch in train_dataset:
+        for ciphertext, label in training_batch:
+            label = config.CIPHER_TYPES.index(label)
+            ciphertext = process_ciphertext(ciphertext)
+            statistics = calculate_histogram(ciphertext) + calculate_digrams(ciphertext) + calculate_cipher_sequence(ciphertext)
+            training_labels.append(label)
+            training_statistics.append(statistics)
+        print(f"Loaded {len(training_labels)} samples")
+        if len(training_labels) >= args.max_iter:
+            break
+    
+    # train model
+    model.fit(training_statistics, training_labels)
+
+    # get features from testing ciphertexts
+    testing_labels, testing_statistics = [], []
+    for testing_batch in test_dataset:
+        for ciphertext, label in testing_batch:
+            label = config.CIPHER_TYPES.index(label)
+            ciphertext = process_ciphertext(ciphertext)
+            statistics = calculate_histogram(ciphertext) + calculate_digrams(ciphertext) + calculate_cipher_sequence(ciphertext)
+            testing_labels.append(label)
+            testing_statistics.append(statistics)
+        if len(testing_labels) >= args.max_iter * 0.25:
+            break
+
+    score = model.score(testing_statistics, testing_labels)
+    print(f"Accuracy: {score}")
+
+    save_model(model, args)
+
+    # get predictions from trained model
+    predictions = model.predict_proba(testing_statistics)
+    # pad predictions with leading aca ciphers and probability of 0
+    padded_predictions = []
+    for prediction in list(predictions):
+        padded_prediction = [0] * 56 + list(prediction)
+        padded_predictions.append(padded_prediction)
+
+    # evaluate model with the predictions and expected labels
+    metrics = PredictionPerformanceMetrics(model_name="Rotor-SVM")
+    metrics.add_predictions(testing_labels, padded_predictions)
+    metrics.print_evaluation()
+
 
 def meta_classifier_pipeline():
     # TODO: ensure all architectures are trained!
@@ -1155,7 +1224,7 @@ def main():
         if architecture in aca_architectures:
             aca_pipeline(args, cipher_types)
         elif architecture in ("SVM-Rotor", "kNN-Rotor", "RF-Rotor"):
-            rotor_pipeline()
+            rotor_pipeline(args)
         else:
             print("Unknown architecture")
             sys.exit(1)
