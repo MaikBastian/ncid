@@ -48,7 +48,6 @@ print = functools.partial(print, flush=True)
 # Used for meta-classifier pipeline
 import cipherTypeDetection.eval as cipherEval
 from cipherTypeDetection.ensembleModel import EnsembleModel
-from cipherTypeDetection.rotorCipherEnsemble import RotorCipherEnsemble
 from types import SimpleNamespace
 import pandas as pd
 
@@ -772,7 +771,7 @@ def expand_cipher_groups(cipher_types):
             expanded.append(config.CIPHER_TYPES[i])
     return expanded
 
-def aca_pipeline(args, cipher_types):
+def aca_training_pipeline(args, cipher_types):
     extend_model = args.extend_model
     architecture = args.architecture
     if extend_model is not None:
@@ -809,7 +808,7 @@ def aca_pipeline(args, cipher_types):
     print(training_stats)
     print(prediction_stats)
 
-def rotor_pipeline(args):
+def rotor_training_pipeline(args):
     # create model
     model = SVC(probability=True, C=1, gamma=0.001, kernel="linear") # TODO: Correct hyperparameters?
 
@@ -887,309 +886,7 @@ def rotor_pipeline(args):
     metrics.print_evaluation()
 
 
-def meta_classifier_pipeline():
-    # TODO: ensure all architectures are trained!
 
-
-    # breakpoint()
-
-    # load aca classifiers
-    model_path = Path("../data/models")
-    try:
-        transformer = tf.keras.models.load_model(
-                os.path.join(model_path, "t96_transformer_final_100.h5"),
-                custom_objects={
-                    'TokenAndPositionEmbedding': TokenAndPositionEmbedding,
-                    'MultiHeadSelfAttention': MultiHeadSelfAttention,
-                    'TransformerBlock': TransformerBlock})
-        ffnn = tf.keras.models.load_model(
-                os.path.join(model_path, "t128_ffnn_final_100.h5"))
-        lstm = tf.keras.models.load_model(
-                os.path.join(model_path, "t129_lstm_final_100.h5"))
-        optimizer = Adam(
-            learning_rate=config.learning_rate,
-            beta_1=config.beta_1,
-            beta_2=config.beta_2,
-            epsilon=config.epsilon,
-            amsgrad=config.amsgrad)
-        for model in [transformer, ffnn, lstm]:
-            model.compile(
-                optimizer=optimizer,
-                loss="sparse_categorical_crossentropy",
-                metrics=[
-                    "accuracy",
-                    SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
-        with open(os.path.join(model_path, "t99_rf_final_100.h5"), "rb") as f:
-            rfc = pickle.load(f)
-        with open(os.path.join(model_path, "t128_nb_final_100.h5"), "rb") as f:
-            nbc = pickle.load(f)
-        aca_classifiers = [transformer, ffnn, lstm, rfc, nbc]
-    except OSError as error:
-        print("ERROR: \n"
-              "At least one of the expected models for recognition of ACA ciphers for "
-              "training of the meta classifier is missing. \n"
-              "Expected filenames of models are: 't96_transformer_final_100.h5', "
-              "'t128_ffnn_final_100.h5', 't129_lstm_final_100.h5', 't99_rf_final_100.h5' "
-              "and 't128_nb_final_100.h5'. These models should be saved in 'data/models'.")
-        sys.exit(1)
-
-    # create rotor classifiers
-    try:
-        with open(os.path.join(model_path, "svm-combined"), "rb") as f:
-            svm = pickle.load(f)
-        with open(os.path.join(model_path, "knn-combined"), "rb") as f:
-            knn = pickle.load(f)
-        # with open(os.path.join(model_path, "rf-combined"), "rb") as f:
-        #     rf2 = pickle.load(f)
-        # with open(os.path.join(model_path, "mlp-combined"), "rb") as f:
-        #     mlp = pickle.load(f)
-        # TODO: Also the rest!
-        rotor_classifiers = [svm, knn]
-    except FileNotFoundError as error:
-        # TODO: Extend error message with model names!
-        print("ERROR: \n"
-              "At least one of the expected models for recognition of Rotor ciphers for "
-              "training of the meta classifier is missing. \n"
-              "Expected filenames of models are: 'svm-combined' and "
-              "'knn-combined'. These models should be saved in 'data/models'.")
-        sys.exit(1)
-
-    try:
-        with open(os.path.join(model_path, "scaler"), "rb") as f:
-            scaler = pickle.load(f)
-    except FileNotFoundError as error:
-        print("ERROR: \n. "
-              "Could not load the scikit-learn StandardScaler. It is expected at the "
-              "path 'data/models/scaler")
-        sys.exit(1)
-
-
-    # TODO: generate ciphertexts for aca architectures
-
-    def load_ciphertext_lines(dir, *, upto_length):
-        """Loads ciphertexts (with file ending .txt) in directory dir and converts them to
-        a list of lines of max length upto_length. The resulting lines are randomized.
-        upto_length should be at least 1000.
-        """
-        upto_length = max(10, upto_length) # TODO: Back to 1000
-
-        files = [x for x in dir.iterdir() if x.is_file() and x.suffix == ".txt"]
-        result = []
-
-        # use some upper limites to limit memory usage
-        max_files = math.floor(upto_length / 10)
-        max_lines = 1000
-
-        random_files = random.sample(files, max_files) if len(files) > max_files else files
-        for file in random_files:
-            with open(file, "r") as f:
-                lines = f.readlines()
-                random_lines = random.sample(lines, max_lines) if len(lines) > max_lines else lines
-                for line in random_lines:
-                    processed_line = line.lower() # TODO: Also remove invalid chars, etc.!
-                    result.append(processed_line)
-
-        return random.sample(result, upto_length) if len(result) > upto_length else result
-    
-    aca_cipher_types = [config.CIPHER_TYPES[cipher_index]
-                        for cipher_index in range(56)]
-    aca_cipher_indices = [config.CIPHER_TYPES.index(cipher_type) 
-                          for cipher_type in aca_cipher_types]
-    rotor_cipher_types = ["Enigma", "M209", "Purple", "Sigaba", "Typex"]
-    all_cipher_types = aca_cipher_types + rotor_cipher_types
-    
-    def predict_with_aca_architectures(ciphertext_lines):
-        cipherEval.architecture = "Ensemble"
-        aca_ensemble = EnsembleModel(aca_classifiers,
-                            ["Transformer", "FFNN", "LSTM", "RF", "NB"],
-                            "weighted",
-                            aca_cipher_indices)
-        
-        aca_architecture_predictions = []
-        for index, value in enumerate(ciphertext_lines):
-            line, cipher_type = value[0], value[1]
-            prediction = cipherEval.predict_single_line(SimpleNamespace(
-                ciphertext=line,
-                # todo: needs fileupload first (either set ciphertext OR file, never both)
-                file=None,
-                ciphers=aca_cipher_types,
-                batch_size=128,
-                verbose=False
-            ), aca_ensemble)
-            prediction = prediction
-            for cipher in rotor_cipher_types:
-                prediction[cipher] = 0
-            aca_architecture_predictions.append([prediction, cipher_type])
-            if index % 100 == 0:
-                print(f"Predicted {index} / {len(ciphertext_lines)} ciphers with the ACA architectures.")
-        
-        return aca_architecture_predictions
-    
-    def predict_with_rotor_architectures(ciphertext_lines):
-        rotor_architecture_predictions = []
-
-        rotor_ensemble = RotorCipherEnsemble(rotor_classifiers, scaler)
-        for value in ciphertext_lines:
-            line, cipher_type = value[0], value[1]
-            prediction = rotor_ensemble.predict_single_line(line.upper())
-            for cipher in aca_cipher_types:
-                prediction[cipher] = 0
-            rotor_architecture_predictions.append([prediction, cipher_type])
-
-        return rotor_architecture_predictions
-    
-    def write_predictions_to_disk(predictions, file_path):
-        with open(file_path, "w") as f:
-            writer = csv.writer(f, delimiter=',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
-            keys = ["actual_cipher"] + list(predictions[0][0].keys())
-            writer.writerow(keys)
-            for prediction in predictions:
-                writer.writerow([prediction[1]] + list(prediction[0].values()))
-
-    # load ciphertexts
-    ciphertext_dir = Path("../encrypted_samples")
-    aca_ciphertext_lines = load_ciphertext_lines(ciphertext_dir / "aca-ciphertexts", upto_length=5000) # 5000!
-    rotor_ciphertext_lines = load_ciphertext_lines(ciphertext_dir / "rotor-ciphertexts", upto_length=5000)
-
-    # combine both ciphertext types together with labels for each type
-    aca_df = pd.DataFrame(aca_ciphertext_lines)
-    aca_df["cipher_type"] = "ACA"
-    rotor_df = pd.DataFrame(rotor_ciphertext_lines)
-    rotor_df["cipher_type"] = "Rotor"
-    ciphertext_lines = pd.concat([aca_df, rotor_df]).to_numpy() # TODO: Remove limit!
-
-    # get predictions from classifiers for all ciphertexts
-    aca_architecture_predictions = predict_with_aca_architectures(ciphertext_lines)
-    # rotor_architecture_predictions = predict_with_rotor_architectures(ciphertext_lines)
-
-    # create and train meta classifier
-    aca_architecture_features = list(map(lambda x: features_from_prediction(x[0], all_cipher_types),
-                                     aca_architecture_predictions))
-    # rotor_architecture_features = list(map(lambda x: features_from_prediction(x[0], all_cipher_types), 
-    #                                    rotor_architecture_predictions))
-
-    feature_names = ["percentage_of_probabilities_above_10_percent", 
-                     "percentage_of_probabilities_below_2_percent", 
-                     "max_probability", "index_of_max_prediction"]
-    
-    feature_dict = {}
-    for feature_name in feature_names:
-        feature_dict[feature_name] = [value[feature_name] for value in aca_architecture_features]
-        # feature_dict[feature_name] = ([value[feature_name] for value in aca_architecture_features] + 
-        #                         [value[feature_name] for value in rotor_architecture_features])
-        
-    aca_key = 0
-    rotor_key = 1
-
-    # feature_dict["classifier"] = ([aca_key] * len(aca_architecture_features) + 
-    #                               [rotor_key] * len(rotor_architecture_features))
-    
-    feature_dict["cipher"] = [aca_key if value[1] == "ACA" else rotor_key 
-                               for value in aca_architecture_predictions]
-    # feature_dict["cipher"] = ([aca_key if value[1] == "ACA" else rotor_key 
-    #                            for value in aca_architecture_predictions] + 
-    #                           [aca_key if value[1] == "ACA" else rotor_key 
-    #                            for value in rotor_architecture_predictions])
-    
-    predictions_df = pd.DataFrame(feature_dict)
-    # write dataframe to disk
-    predictions_df.to_csv(ciphertext_dir / "feature_predictions.csv")
- 
-    # predictions_df = pd.read_csv(ciphertext_dir / "feature_predictions.csv", index_col=[0])
-    # # predictions_df = predictions_df.drop("percentage_of_probabilities_above_10_percent", axis=1)
-    # predictions_df = predictions_df.drop("median_probability", axis=1)
-    # predictions_df = predictions_df.iloc[:400]
-
-    y = predictions_df["cipher"].to_numpy()
-    X = predictions_df.drop("cipher", axis=1).to_numpy()
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, shuffle=True, stratify=y)
-
-    meta_scaler = StandardScaler()
-
-    X_train_scaled = meta_scaler.fit_transform(X_train)
-    X_test_scaled = meta_scaler.transform(X_test)
-
-    def train_knn():
-        cv_method = StratifiedKFold(n_splits=10, shuffle=True)
-        meta_classifier = GridSearchCV(KNeighborsClassifier(), 
-                                    param_grid={"n_neighbors": [1, 2, 3, 5, 8, 10, 15], 
-                                                "weights": ("distance", "uniform"),
-                                                "metric": ('euclidean', 'manhattan')},
-                                    cv=cv_method,
-                                    scoring="accuracy",
-                                    return_train_score=False,
-                                    verbose=1)
-
-        meta_classifier.fit(X_train_scaled, y_train)
-        score = meta_classifier.score(X_test_scaled, y_test)
-        print(f"Score of kNN meta classifier: {score}")
-        print(f"Best kNN params: {meta_classifier.best_params_}")
-        print(f"Best kNN score: {meta_classifier.best_score_}")
-
-        with open(model_path / "kNN-meta-classifier", "wb") as f:
-            pickle.dump(meta_classifier, f)
-        with open(model_path / "kNN-meta-classifier-scaler", "wb") as f:
-            pickle.dump(meta_scaler, f)
-
-    def train_svm():
-        cv_method = StratifiedKFold(n_splits=10, shuffle=True)
-        meta_classifier = GridSearchCV(SVC(), # probability=True
-                                    param_grid=[
-        {"kernel": ["rbf"], "gamma": [1e-3, 1e-4], "C": [1, 10, 100]}
-    ],
-                                    cv=cv_method,
-                                    scoring="accuracy",
-                                    refit=True,
-                                    verbose=1)
-
-        meta_classifier.fit(X_train_scaled, y_train)
-        score = meta_classifier.score(X_test_scaled, y_test)
-        print(f"Score of SVM meta classifier: {score}")
-        print(f"Best SVM params: {meta_classifier.best_params_}")
-        print(f"Best SVM score: {meta_classifier.best_score_}")
-
-        with open(model_path / "svm-meta-classifier", "wb") as f:
-            pickle.dump(meta_classifier, f)
-        with open(model_path / "svm-meta-classifier-scaler", "wb") as f:
-            pickle.dump(meta_scaler, f)
-    
-    # Fitting 10 folds for each of 28 candidates, totalling 280 fits
-    # [Parallel(n_jobs=1)]: Done  49 tasks      | elapsed:    2.3s
-    # [Parallel(n_jobs=1)]: Done 199 tasks      | elapsed:   10.5s
-    # Score of kNN meta classifier: 0.9544
-    # Best kNN params: {'metric': 'manhattan', 'n_neighbors': 15, 'weights': 'uniform'}
-    # Best kNN score: 0.952
-    # Fitting 10 folds for each of 6 candidates, totalling 60 fits
-    # [Parallel(n_jobs=1)]: Done  49 tasks      | elapsed:   29.7s
-    # Score of SVM meta classifier: 0.9252
-    # Best SVM params: {'C': 100, 'gamma': 0.001, 'kernel': 'rbf'}
-    # Best SVM score: 0.9210666666666667
-    train_knn()
-    train_svm()
-
-def features_from_prediction(prediction, cipher_types):
-        probabilities_above_10_percent = 0
-        probabilities_below_2_percent = 0
-
-        max_probability = 0
-        max_prediction_index = -1
-
-        for cipher, probability in prediction.items():
-            if probability > 10:
-                probabilities_above_10_percent += 1
-            elif probability < 2 and probability > 0:
-                probabilities_below_2_percent += 1
-            if probability > max_probability:
-                max_probability = probability
-                max_prediction_index = cipher_types.index(cipher)
-            
-
-        percentage_of_probabilities_above_10_percent = probabilities_above_10_percent / len(prediction)
-        percentage_of_probabilities_below_2_percent = probabilities_below_2_percent / len(prediction)
-
-        return {"percentage_of_probabilities_above_10_percent": percentage_of_probabilities_above_10_percent, 
-                "percentage_of_probabilities_below_2_percent": percentage_of_probabilities_below_2_percent, 
-                "max_probability": max_probability, "index_of_max_prediction": max_prediction_index}
 
 def main():
     # Don't fork processes to keep memory footprint low. 
@@ -1209,25 +906,21 @@ def main():
         print('ERROR: The model name must have the ".h5" extension!', file=sys.stderr)
         sys.exit(1)
 
-    create_meta_classifier = False
-    if create_meta_classifier:
-        meta_classifier_pipeline()
-    else:
-        args.plaintext_input_directory = os.path.abspath(args.plaintext_input_directory)
-        args.rotor_input_directory = os.path.abspath(args.rotor_input_directory)
-        args.ciphers = args.ciphers.lower()
-        architecture = args.architecture
-        cipher_types = args.ciphers.split(',')
+    args.plaintext_input_directory = os.path.abspath(args.plaintext_input_directory)
+    args.rotor_input_directory = os.path.abspath(args.rotor_input_directory)
+    args.ciphers = args.ciphers.lower()
+    architecture = args.architecture
+    cipher_types = args.ciphers.split(',')
 
-        aca_architectures = ("LSTM", "FFNN", "CNN", "RF", "ET", "DT", "NB", "Transformer", 
-                             "SVM", "kNN", "[FFNN,NB]", "[DT,ET,RF,SVM,kNN]")
-        if architecture in aca_architectures:
-            aca_pipeline(args, cipher_types)
-        elif architecture in ("SVM-Rotor", "kNN-Rotor", "RF-Rotor"):
-            rotor_pipeline(args)
-        else:
-            print("Unknown architecture")
-            sys.exit(1)
+    aca_architectures = ("LSTM", "FFNN", "CNN", "RF", "ET", "DT", "NB", "Transformer", 
+                            "SVM", "kNN", "[FFNN,NB]", "[DT,ET,RF,SVM,kNN]")
+    if architecture in aca_architectures:
+        aca_training_pipeline(args, cipher_types)
+    elif architecture in ("SVM-Rotor", "kNN-Rotor", "RF-Rotor"):
+        rotor_training_pipeline(args)
+    else:
+        print("Unknown architecture")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()    

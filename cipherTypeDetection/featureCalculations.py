@@ -1412,31 +1412,25 @@ def calculate_statistics(datum):
     # TODO: Takes too long!
     # ldi_stats = calculate_ldi_stats(numbers) # 5
 
-    is_training_metamodel = False
-    if not is_training_metamodel:
-        histogram = calculate_histogram(datum)
-        digrams = calculate_digrams(datum)
-        max_digrams = calculate_max_digrams(datum)
-        cipher_sequence = calculate_cipher_sequence(datum)
-        average_distance = calculate_average_distance(datum)
-        longest_distance = calculate_longest_distance(datum)
-        col_freq = calculate_column_frequencies(datum)
+    histogram = calculate_histogram(datum)
+    digrams = calculate_digrams(datum)
+    max_digrams = calculate_max_digrams(datum)
+    cipher_sequence = calculate_cipher_sequence(datum)
+    average_distance = calculate_average_distance(datum)
+    longest_distance = calculate_longest_distance(datum)
+    col_freq = calculate_column_frequencies(datum)
 
     # baseline model
     # return [unigram_ioc] + [digraphic_ioc] + [has_j] + [entropy] + [chi_square] + [has_h] + [has_sp] + [has_x] + frequencies
 
-    if not is_training_metamodel:
-        # TODO: + [rod] + [lr] was removed because of bad performance 
-        # TODO: + ldi_stats was removed because of bad performance 
-        return [unigram_ioc] + [digraphic_ioc] + frequencies + [has_0] + [has_h] + [has_j] + [has_x] + [has_sp] + [sdd] +\
-            [ldi] + [nomor] + [phic] + [bdi] + [ptx] + [nic] + [mka] + [mic] + cipher_sequence + histogram + digrams + [max_digrams] + average_distance + longest_distance + col_freq
+    # TODO: + [rod] + [lr] was removed because of bad performance 
+    # TODO: + ldi_stats was removed because of bad performance 
+    return [unigram_ioc] + [digraphic_ioc] + frequencies + [has_0] + [has_h] + [has_j] + [has_x] + [has_sp] + [sdd] +\
+        [ldi] + [nomor] + [phic] + [bdi] + [ptx] + [nic] + [mka] + [mic] + cipher_sequence + histogram + digrams + [max_digrams] + average_distance + longest_distance + col_freq
 
 
-        return [unigram_ioc] + [digraphic_ioc] + frequencies + [has_0] + [has_h] + [has_j] + [has_x] + [has_sp] + [sdd] +\
-            [ldi] + [nomor] + [phic] + [bdi] + [ptx] + [nic] + [mka] + [mic] + cipher_sequence + histogram + digrams + [max_digrams] + average_distance + longest_distance
-    else:
-        return [unigram_ioc] + [digraphic_ioc] + frequencies + [has_0] + [has_h] + [has_j] + [has_x] + [has_sp] + [rod] + [lr] + [sdd] +\
-           [ldi] + [nomor] + [phic] + [bdi] + [ptx] + [nic] + [mka] + [mic] + ldi_stats
+    return [unigram_ioc] + [digraphic_ioc] + frequencies + [has_0] + [has_h] + [has_j] + [has_x] + [has_sp] + [sdd] +\
+        [ldi] + [nomor] + [phic] + [bdi] + [ptx] + [nic] + [mka] + [mic] + cipher_sequence + histogram + digrams + [max_digrams] + average_distance + longest_distance
 
     # all features
     # return [unigram_ioc] + [digraphic_ioc] + [has_j] + [entropy] + [chi_square] + [has_h] + [has_sp] + [has_x] + [has_0] + [mic] +\
