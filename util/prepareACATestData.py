@@ -3,7 +3,7 @@ import os
 from textUtils import map_text_into_numberspace
 sys.path.append("../")
 from cipherTypeDetection.config import CIPHER_TYPES, CIPHER_IMPLEMENTATIONS
-from cipherTypeDetection.textLine2CipherStatisticsDataset import calculate_statistics
+from cipherTypeDetection.cipherStatisticsDataset import calculate_statistics
 from cipherImplementations.cipher import OUTPUT_ALPHABET
 types = CIPHER_TYPES
 

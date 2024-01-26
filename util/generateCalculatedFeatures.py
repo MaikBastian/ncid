@@ -13,7 +13,7 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 sys.path.append("../")
 import cipherTypeDetection.config as config
-from cipherTypeDetection.textLine2CipherStatisticsDataset import CipherStatisticsDataset
+from cipherTypeDetection.cipherStatisticsDataset import CipherStatisticsDataset
 tf.debugging.set_log_device_placement(enabled=False)
 # always flush after print as some architectures like RF need very long time before printing anything.
 print = functools.partial(print, flush=True)

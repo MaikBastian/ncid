@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 sys.path.append("../")
 from cipherTypeDetection import config as config
-from cipherTypeDetection.textLine2CipherStatisticsDataset import encrypt
+from cipherTypeDetection.cipherStatisticsDataset import encrypt
 from cipherImplementations.cipher import OUTPUT_ALPHABET, UNKNOWN_SYMBOL
 from util.utils import read_txt_list_from_file, write_ciphertexts_with_keys_to_file, map_numbers_into_textspace,\
     write_txt_list_to_file, print_progress

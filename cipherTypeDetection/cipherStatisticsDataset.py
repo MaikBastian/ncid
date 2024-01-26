@@ -11,7 +11,7 @@ from multiprocessing import pool as multiprocessing_pool
 import logging
 import numpy as np
 from collections import deque
-from featureCalculations import calculate_statistics
+from cipherTypeDetection.featureCalculations import calculate_statistics
 sys.path.append("../")
 
 

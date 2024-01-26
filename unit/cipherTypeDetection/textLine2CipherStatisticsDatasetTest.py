@@ -1,6 +1,6 @@
 import unittest
 from collections import Counter
-from cipherTypeDetection import textLine2CipherStatisticsDataset as ds
+from cipherTypeDetection import cipherStatisticsDataset as ds
 import unit.cipherImplementations.cipherTest as cipherTest
 from util.utils import map_text_into_numberspace
 import math
