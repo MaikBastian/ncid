@@ -715,7 +715,7 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
                 prediction_metrics[architecture].add_predictions(labels, prediction)
             elif architecture == "[FFNN,NB]":
                 prediction = model[0].predict(statistics, batch_size=args.batch_size, verbose=1)
-                nb_prediction = model[1].predict(statistics)
+                nb_prediction = model[1].predict_proba(statistics)
                 prediction_metrics["FFNN"].add_predictions(labels, prediction)
                 prediction_metrics["NB"].add_predictions(labels, nb_prediction)
             elif architecture == "[DT,ET,RF,SVM,kNN]":
