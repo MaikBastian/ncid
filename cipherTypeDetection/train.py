@@ -520,6 +520,7 @@ def train_model(model, args, train_ds):
             if train_ds.iteration < args.max_iter:
                 print("Loaded %d ciphertexts." % train_ds.iteration)
                 continue
+            train_ds.stop_outstanding_tasks()
             print("Loaded %d ciphertexts." % train_ds.iteration)
             training_batches = [combined_batch]
 
@@ -740,7 +741,8 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
                 break
         if test_ds.iteration >= args.max_iter:
             break
-
+    
+    test_ds.stop_outstanding_tasks()
     elapsed_prediction_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
 
     if total_len_prediction > args.train_dataset_size:
