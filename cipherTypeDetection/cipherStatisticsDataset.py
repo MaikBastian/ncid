@@ -123,6 +123,12 @@ class CipherStatisticsDataset:
         self._ciphertext_dataset = RotorCiphertextsDataset(self._rotor_ciphertexts_with_labels, 
                                                            self._rotor_ciphertext_dataset_params, 
                                                            self._logger)
+    @property
+    def both_datasets_initialized(self):
+        """Inidcates whether both ciphertext and plaintext datasets are initialized.
+        Useful for mixing the different results of the workers in `next`.
+        """
+        return self._ciphertext_dataset.is_initialized and self._plaintext_dataset.is_initialized
     
     @property
     def iteration(self):
@@ -204,8 +210,13 @@ class CipherStatisticsDataset:
         # Get all results of this iteration
         all_results = self._wait_for_results(number_of_processes=combined_process_count)
 
+        # If a dataset is not initalized: No need to mix ciphertext and plaintext results. 
+        # Simply return all results of this iteration.
+        if not self.both_datasets_initialized:
+            return all_results
+
         # Wait until the workers of both cipher types have finished. Otherwise the returned
-        # batch could only contain aca or rotor ciphers. 
+        # batch could only contain aca or rotor ciphers.
         while TrainingBatch.represent_equal_cipher_type(all_results):
             assert len(self._processing_queue) > 0, "Expected different cipher type in queue!"
             next_results = self._wait_for_results(number_of_processes=combined_process_count)
@@ -227,27 +238,31 @@ class CipherStatisticsDataset:
         ciphertext_inputs_exhausted = False
         plaintext_inputs_exhausted = False
 
+        worker = None
         for index in range(number_of_processes):
             # start rotor and plaintext worker alternatly after one another
             if index % 2 == 0:
                 try:
-                    worker = ciphertext_worker
-                    input_batch = next(ciphertext_dataset)
+                    if ciphertext_dataset.is_initialized:
+                        worker = ciphertext_worker
+                        input_batch = next(ciphertext_dataset)
                 except StopIteration:
                     ciphertext_inputs_exhausted = True
                     continue
             else:
                 try:
-                    worker = plaintext_worker
-                    input_batch = next(plaintext_dataset)
+                    if plaintext_dataset.is_initialized:
+                        worker = plaintext_worker
+                        input_batch = next(plaintext_dataset)
                 except StopIteration:
                     plaintext_inputs_exhausted = True
                     continue
 
-            batch = self._pool.apply_async(worker.perform, 
-                                            (input_batch, ),
-                                            error_callback=error_callback)
-            self._processing_queue.append(batch)
+            if worker:
+                batch = self._pool.apply_async(worker.perform, 
+                                                (input_batch, ),
+                                                error_callback=error_callback)
+                self._processing_queue.append(batch)
         
         return (ciphertext_inputs_exhausted, plaintext_inputs_exhausted)
 
@@ -257,7 +272,7 @@ class CipherStatisticsDataset:
             try:
                 result = self._processing_queue.popleft()
             except IndexError:
-                break
+                continue
             training_batch = result.get()
             self._iteration += len(training_batch)
             training_batches.append(training_batch)
@@ -345,6 +360,11 @@ class RotorCiphertextsDataset:
                 rearranged.append(element)
 
         self._ciphertexts_with_labels = rearranged
+    
+    @property
+    def is_initialized(self):
+        """Indicates whether the dataset was initialized with input data."""
+        return len(self._ciphertexts_with_labels) != 0
 
     def __iter__(self):
         return self
@@ -389,17 +409,18 @@ class PlaintextPathsDataset:
         self._keep_unknown_symbols = dataset_params.keep_unknown_symbols
         self._logger = logger
 
-        cipher_types = dataset_params.cipher_types
+        self._cipher_types = dataset_params.cipher_types
 
         key_lengths_count = 0
-        for cipher_t in cipher_types:
-            index = cipher_types.index(cipher_t)
+        for cipher_t in self._cipher_types:
+            index = self._cipher_types.index(cipher_t)
             if isinstance(config.KEY_LENGTHS[index], list):
                 key_lengths_count += len(config.KEY_LENGTHS[index])
             else:
                 key_lengths_count += 1
         self._key_lengths_count = key_lengths_count
 
+        self._plaintext_paths = plaintext_paths
         self._plaintext_dataset = tf.data.TextLineDataset(plaintext_paths)
         self._dataset_iter = self._plaintext_dataset.__iter__()
 
@@ -408,6 +429,11 @@ class PlaintextPathsDataset:
     @property
     def key_lengths_count(self):
         return self._key_lengths_count
+    
+    @property
+    def is_initialized(self):
+        """Indicates whether the dataset was initialized with input data."""
+        return len(self._plaintext_paths) != 0 and len(self._cipher_types) != 0
 
     def __iter__(self):
         return self
@@ -495,7 +521,7 @@ class CiphertextLine2CipherStatisticsWorker:
             if self._generate_evaluation_data:
                 test_data.append(processed_line)
             
-        if config.pad_input:
+        if config.pad_input and len(features) != 0:
             features = pad_sequences(features, maxlen=self._max_text_len)
             features = features.reshape(features.shape[0], features.shape[1], 1)
         

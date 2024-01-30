@@ -341,11 +341,26 @@ def download_datasets(args):
     os.rmdir(os.path.dirname(path))
     print("Datasets Downloaded.")
 
-def load_rotor_ciphertext_datasets_from_disk(args, max_lines_per_cipher):
+def load_rotor_ciphertext_datasets_from_disk(args, requested_cipher_types, *, max_lines_per_cipher):
     def validate_ciphertext_path(ciphertext_path, cipher_types):
         file_name = Path(ciphertext_path).stem.lower()
         if not file_name in cipher_types:
-            raise Exception(f"Filename must equal one of the expected cipher types. Expected cipher types are: {cipher_types}. Current filename is '{file_name}'.")
+            raise Exception(f"Filename must equal one of the expected cipher types. "
+                            "Expected cipher types are: {cipher_types}. Current "
+                            "filename is '{file_name}'.")
+    
+    # Check if all rotor ciphers are in the requested cipher_types. Otherwise return empty lists.
+    # TODO: Probably should change requested_cipher_type from indices to enums (aca, mct3, rotor, etc.)
+    rotor_cipher_types = [config.CIPHER_TYPES[i] for i in range(56, 61)]
+    for rotor_type in rotor_cipher_types:
+        if not rotor_type in requested_cipher_types:
+            empty_params = RotorCiphertextsDatasetParameters(config.ROTOR_CIPHER_TYPES, 
+                                                            0,
+                                                            args.dataset_workers, 
+                                                            args.min_train_len, 
+                                                            args.max_train_len,
+                                                            generate_evalutation_data=False)
+            return ([], empty_params, [], empty_params)
     
     rotor_cipher_dir = args.rotor_input_directory
     rotor_ciphertexts = []
@@ -367,21 +382,25 @@ def load_rotor_ciphertext_datasets_from_disk(args, max_lines_per_cipher):
     train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertexts, test_size=0.2, 
                                                                        random_state=42, shuffle=True)
 
-    # Calculate batch size for rotor ciphers. The amount of samples per rotor cipher should be
-    # equal to the amount of samples per aca cipher.
+    # Calculate batch size for rotor ciphers. If both aca and rotor ciphers are requested, 
+    # the amount of samples of each rotor cipher per batch should be equal to the 
+    # amount of samples of each aca cipher per loaded batch.
     number_of_rotor_ciphers = len(config.ROTOR_CIPHER_TYPES)
-    number_of_aca_ciphers = len(config.CIPHER_TYPES) - number_of_rotor_ciphers
-    amount_of_samples_per_cipher = args.train_dataset_size // number_of_aca_ciphers
-    rotor_train_dataset_size = amount_of_samples_per_cipher * number_of_rotor_ciphers
+    number_of_aca_ciphers = len(requested_cipher_types) - number_of_rotor_ciphers
+    if number_of_aca_ciphers == 0:
+        rotor_dataset_batch_size = args.train_dataset_size
+    else:
+        amount_of_samples_per_cipher = args.train_dataset_size // number_of_aca_ciphers
+        rotor_dataset_batch_size = amount_of_samples_per_cipher * number_of_rotor_ciphers
 
     train_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(config.ROTOR_CIPHER_TYPES, 
-                                                            rotor_train_dataset_size,
+                                                            rotor_dataset_batch_size,
                                                             args.dataset_workers, 
                                                             args.min_train_len, 
                                                             args.max_train_len,
                                                             generate_evalutation_data=False)
     test_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(config.ROTOR_CIPHER_TYPES,
-                                                            rotor_train_dataset_size,
+                                                            rotor_dataset_batch_size,
                                                             args.dataset_workers, 
                                                             args.min_test_len, 
                                                             args.max_test_len,
@@ -391,6 +410,18 @@ def load_rotor_ciphertext_datasets_from_disk(args, max_lines_per_cipher):
             test_rotor_ciphertexts, test_rotor_ciphertexts_parameters)
 
 def load_plaintext_datasets_from_disk(args, cipher_types):
+    # Check if all aca ciphers are in the required cipher_types. Otherwise return empty lists.
+    aca_cipher_types = [config.CIPHER_TYPES[i] for i in range(56)]
+    for aca_type in aca_cipher_types:
+        if not aca_type in cipher_types:
+            empty_params = PlaintextPathsDatasetParameters([], 
+                                                           args.train_dataset_size, 
+                                                           args.min_train_len, 
+                                                           args.max_train_len,
+                                                           args.keep_unknown_symbols, 
+                                                           args.dataset_workers)
+            return ([], empty_params, [], empty_params)
+
     plaintext_files = []
     dir_name = os.listdir(args.plaintext_input_directory)
     for name in dir_name:
@@ -426,12 +457,12 @@ def load_datasets_from_disk(args, cipher_types):
     (train_rotor_ciphertexts, 
      train_rotor_ciphertexts_parameters, 
      test_rotor_ciphertexts, 
-     test_rotor_ciphertexts_parameters) = load_rotor_ciphertext_datasets_from_disk(args, 3000)
+     test_rotor_ciphertexts_parameters) = load_rotor_ciphertext_datasets_from_disk(args, cipher_types, max_lines_per_cipher=30000)
 
     train_ds = CipherStatisticsDataset(train_plaintexts, train_plaintext_parameters, train_rotor_ciphertexts, train_rotor_ciphertexts_parameters)
     test_ds = CipherStatisticsDataset(test_plaintexts, test_plaintext_parameters, test_rotor_ciphertexts, test_rotor_ciphertexts_parameters)
 
-    if args.train_dataset_size % train_ds.key_lengths_count != 0:
+    if train_ds.key_lengths_count > 0 and args.train_dataset_size % train_ds.key_lengths_count != 0:
         print("WARNING: the --train_dataset_size parameter must be dividable by the amount of --ciphers  and the length configured "
               "KEY_LENGTHS in config.py. The current key_lengths_count is %d" % 
                   train_ds.key_lengths_count, file=sys.stderr)
