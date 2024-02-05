@@ -1,12 +1,13 @@
 from pathlib import Path
 import argparse
+import random
 import sys
 import os
 import pickle
-import ast
 import functools
 import numpy as np
 from datetime import datetime
+
 # This environ variable must be set before all tensorflow imports!
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
@@ -18,6 +19,7 @@ from util.utils import map_text_into_numberspace
 from util.utils import print_progress
 import cipherTypeDetection.config as config
 from cipherTypeDetection.cipherStatisticsDataset import CipherStatisticsDataset, PlaintextPathsDatasetParameters, RotorCiphertextsDatasetParameters, calculate_statistics, pad_sequences
+from cipherTypeDetection.rotorDifferentiationEnsemble import RotorDifferentiationEnsemble
 from cipherTypeDetection.ensembleModel import EnsembleModel
 from cipherTypeDetection.transformer import MultiHeadSelfAttention, TransformerBlock, TokenAndPositionEmbedding
 from util.utils import get_model_input_length
@@ -76,11 +78,17 @@ def benchmark(args, model, architecture):
         path = os.path.join(rotor_cipher_dir, name)
         validate_ciphertext_path(path, config.ROTOR_CIPHER_TYPES)
         if os.path.isfile(path):
+            max = 4000
             with open(path, "r") as f:
                 label = Path(path).stem.lower()
                 lines = f.readlines()
                 for line in lines:
+                    max -= 1
+                    if max <= 0:
+                        break
                     rotor_ciphertexts.append((line.rstrip(), label))
+
+    random.shuffle(rotor_ciphertexts)
     
     # Calculate batch size for rotor ciphers. The amount of samples per rotor cipher should be
     # equal to the amount of samples per aca cipher.
@@ -121,7 +129,7 @@ def benchmark(args, model, architecture):
         
         for index, batch in enumerate(batches):
             statistics, labels, ciphertexts = batch.tuple()
-            
+
             if architecture == "FFNN":
                 results.append(model.evaluate(statistics, labels, batch_size=args.batch_size, verbose=1))
             if architecture in ("CNN", "LSTM", "Transformer"):
@@ -142,6 +150,7 @@ def benchmark(args, model, architecture):
 
         if dataset.iteration >= args.max_iter:
             break
+    
     elapsed_evaluation_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
     print('Finished evaluation in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
         elapsed_evaluation_time.days, elapsed_evaluation_time.seconds // 3600, (elapsed_evaluation_time.seconds // 60) % 60,
@@ -161,10 +170,13 @@ def benchmark(args, model, architecture):
         print("Average evaluation results: loss: %f, accuracy: %f, k3_accuracy: %f\n" % (avg_loss, avg_acc, avg_k3_acc))
     elif architecture in ("DT", "NB", "RF", "ET", "Ensemble", "SVM", "kNN"):
         avg_test_acc = 0
-        for acc in results:
+        avg_k3_acc = 0
+        for acc, k3_acc in results:
             avg_test_acc += acc
+            avg_k3_acc += k3_acc
         avg_test_acc = avg_test_acc / len(results)
-        print("Average evaluation results from %d iterations: avg_test_acc=%f" % (iteration, avg_test_acc))
+        avg_k3_acc = avg_k3_acc / len(results)
+        print("Average evaluation results from %d iterations: avg_test_acc=%f, k3_accuracy: %f\n" % (iteration, avg_test_acc, avg_k3_acc))
 
 
 def evaluate(args, model, architecture):
@@ -287,7 +299,6 @@ def evaluate(args, model, architecture):
 
 
 def predict_single_line(args, model, architecture):
-    config.CIPHER_TYPES = args.ciphers
     cipher_id_result = ''
     ciphertexts = []
     result = []
@@ -307,6 +318,14 @@ def predict_single_line(args, model, architecture):
         # statistics = ast.literal_eval(line.split(b' ')[1].decode())
         # ciphertext = ast.literal_eval(line.split(b' ')[2].decode())
         # print(config.CIPHER_TYPES[int(label.decode())], "length: %d" % len(ciphertext))
+
+        # Append ciphertext to itself. This improves the reliablity of the results.
+        # TODO: Why is this the case, the features should not rely on the length of the
+        # input
+        while len(line) < 1000:
+            line = line + line
+        # Limit line to at most 2000 characters to limit the execution time
+        line = line[:1000]
 
         print(line)
         ciphertext = map_text_into_numberspace(line, OUTPUT_ALPHABET, UNKNOWN_SYMBOL_NUMBER)
@@ -341,7 +360,7 @@ def predict_single_line(args, model, architecture):
             result = model.predict(tf.convert_to_tensor([statistics]), [ciphertext], args.batch_size, verbose=0)
 
         if isinstance(result, list):
-            result_list = result[0]
+            result_list = list(result[0])
         else:
             result_list = result[0].tolist()
         if results is not None and architecture not in ('Ensemble', 'LSTM', 'Transformer', 'CNN'):
@@ -374,16 +393,18 @@ def load_model(architecture, args, model_path, cipher_types):
     strategy = args.strategy
     model_list = args.models
     architecture_list = args.architectures
+    
+    model = None
 
     if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
         if architecture == 'Transformer':
             if not hasattr(config, "maxlen"):
                 raise ValueError("maxlen must be defined in the config when loading a Transformer model!")
-            model_ = tf.keras.models.load_model(args.model, custom_objects={
+            model = tf.keras.models.load_model(args.model, custom_objects={
                 'TokenAndPositionEmbedding': TokenAndPositionEmbedding, 'MultiHeadSelfAttention': MultiHeadSelfAttention,
                 'TransformerBlock': TransformerBlock})
         else:
-            model_ = tf.keras.models.load_model(args.model)
+            model = tf.keras.models.load_model(args.model)
         if architecture in ("CNN", "LSTM", "Transformer"):
             config.FEATURE_ENGINEERING = False
             config.PAD_INPUT = True
@@ -392,21 +413,27 @@ def load_model(architecture, args, model_path, cipher_types):
             config.PAD_INPUT = False
         optimizer = Adam(learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, epsilon=config.epsilon,
                          amsgrad=config.amsgrad)
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy",
+        model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy",
                        metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
-        return model_
-    if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
+    elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
         config.FEATURE_ENGINEERING = True
         config.PAD_INPUT = False
         with open(model_path, "rb") as f:
-            return pickle.load(f)
-    if architecture == 'Ensemble':
+            model = pickle.load(f)
+    elif architecture == 'Ensemble':
         cipher_indices = []
         for cipher_type in cipher_types:
             cipher_indices.append(config.CIPHER_TYPES.index(cipher_type))
-        return EnsembleModel(model_list, architecture_list, strategy, cipher_indices)
+        model = EnsembleModel(model_list, architecture_list, strategy, cipher_indices)
     else:
         raise ValueError("Unknown architecture: %s" % architecture)
+    
+    rotor_only_model_path = args.rotor_only_model
+    with open(rotor_only_model_path, "rb") as f:
+        rotor_only_model = pickle.load(f)
+
+    # Embed all models in RotorDifferentiationEnsemble to improve recognition of rotor ciphers
+    return RotorDifferentiationEnsemble(architecture, model, rotor_only_model)
 
 def expand_cipher_groups(cipher_types):
     """Turn cipher group identifiers (ACA, MTC3) into a list of their ciphers"""
@@ -440,7 +467,11 @@ def parse_arguments():
     parser.add_argument('--max_iter', default=1000000000, type=int,
                         help='the maximal number of iterations before stopping evaluation.')
     parser.add_argument('--model', default='../data/models/m1.h5', type=str,
-                        help='Name of the model file. The file must have the .h5 extension.')
+                        help='Path to the model file. The file must have the .h5 extension.')
+    parser.add_argument('--rotor_only_model', default='../data/models/svm_rotor_only.h5', type=str,
+                        help='Path to rotor only model. This model is used in conjunction '
+                        'with the normal model in an ensemble to improve the recogintion '
+                        'of rotor ciphers. The file must have the .h5 extension.')
     parser.add_argument('--architecture', default='FFNN', type=str, choices=[
         'FFNN', 'CNN', 'LSTM', 'DT', 'NB', 'RF', 'ET', 'Transformer', 'SVM', 'kNN', 'Ensemble'],
         help='The architecture to be used for training. \n'
@@ -575,6 +606,9 @@ def main():
     #     model = load_model()
     model = load_model(architecture, args, model_path, cipher_types)
     print("Model Loaded.")
+
+    # Model is now always an ensemble
+    architecture = "Ensemble"
 
     # the program was started as in benchmark mode.
     if args.download_dataset is not None:
