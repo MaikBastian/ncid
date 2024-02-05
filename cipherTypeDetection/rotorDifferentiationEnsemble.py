@@ -1,6 +1,6 @@
 import numpy as np
 import cipherTypeDetection.config as config
-from cipherTypeDetection.featureCalculations import calculate_histogram, calculate_digrams, calculate_cipher_sequence
+from cipherTypeDetection.featureCalculations import calculate_statistics
 
 class RotorDifferentiationEnsemble:
     """This ensemble helps differentiating the rotor ciphers. The best training
@@ -42,9 +42,7 @@ class RotorDifferentiationEnsemble:
 
             if max_prediction in rotor_cipher_labels:
                 # Use _rotor_only_model to correctly differentiate between the different rotor ciphers
-                rotor_cipher_statistics = (calculate_histogram(ciphertext) + 
-                                           calculate_digrams(ciphertext) + 
-                                           calculate_cipher_sequence(ciphertext))
+                rotor_cipher_statistics = calculate_statistics(ciphertext)
                 rotor_predictions = self._rotor_only_model.predict_proba([rotor_cipher_statistics])[0]
 
                 # Calculate scale factor for the rotor cipher predictions. Since the general models 
