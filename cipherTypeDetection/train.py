@@ -75,84 +75,80 @@ def create_model(architecture, extend_model, cipher_types, max_train_len):
     # model_.add(tf.keras.layers.Dense(output_layer_size, input_dim=input_layer_size, activation='softmax', use_bias=True))
     # model_.compile(optimizer='sgd', loss="sparse_categorical_crossentropy", metrics=["accuracy"])
 
-    # extend model
+    # Create a model based on an existing one for further trainings
     if extend_model is not None:
         # remove the last layer
-        model_ = tf.keras.Sequential()
+        model = tf.keras.Sequential()
         for layer in extend_model.layers[:-1]:
-            model_.add(layer)
-        model_.add(tf.keras.layers.Dense(output_layer_size, activation='softmax', name="output"))
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy",
+            model.add(layer)
+        model.add(tf.keras.layers.Dense(output_layer_size, activation='softmax', name="output"))
+        model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy",
                        metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
-        return model_
-
-    # FFNN
-    if architecture == 'FFNN':
-        model_ = tf.keras.Sequential()
-        model_.add(tf.keras.layers.Input(shape=(input_layer_size,)))
+        return model
+    
+    # Create new model based on architecture
+    if architecture == "FFNN":
+        model = tf.keras.Sequential()
+        model.add(tf.keras.layers.Input(shape=(input_layer_size,)))
         for _ in range(config.hidden_layers):
-            model_.add(tf.keras.layers.Dense(hidden_layer_size, activation='relu', use_bias=True))
-        model_.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
-                       metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
-
-    # CNN
-    if architecture == 'CNN':
+            model.add(tf.keras.layers.Dense(hidden_layer_size, activation='relu', use_bias=True))
+        model.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
+        model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
+                    metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
+        return model
+    
+    elif architecture == "CNN":
         config.FEATURE_ENGINEERING = False
         config.PAD_INPUT = True
-        model_ = tf.keras.Sequential()
-        model_.add(tf.keras.layers.Conv1D(
-                   filters=config.filters, kernel_size=config.kernel_size, 
-                   input_shape=(max_train_len, 1), activation='relu'))
+        model = tf.keras.Sequential()
+        model.add(tf.keras.layers.Conv1D(
+                filters=config.filters, kernel_size=config.kernel_size, 
+                input_shape=(max_train_len, 1), activation='relu'))
         for _ in range(config.layers - 1):
-            model_.add(tf.keras.layers.Conv1D(filters=config.filters, kernel_size=config.kernel_size, activation='relu'))
+            model.add(tf.keras.layers.Conv1D(filters=config.filters, kernel_size=config.kernel_size, activation='relu'))
         # model_.add(tf.keras.layers.Dropout(0.2))
-        model_.add(tf.keras.layers.MaxPooling1D(pool_size=2))
-        model_.add(tf.keras.layers.Flatten())
-        model_.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
-                       metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
-
-    # LSTM
-    if architecture == 'LSTM':
+        model.add(tf.keras.layers.MaxPooling1D(pool_size=2))
+        model.add(tf.keras.layers.Flatten())
+        model.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
+        model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
+                    metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
+        return model
+    
+    elif architecture == "LSTM":
         config.FEATURE_ENGINEERING = False
         config.PAD_INPUT = True
-        model_ = tf.keras.Sequential()
-        model_.add(tf.keras.layers.Embedding(56, 64, input_length=max_train_len))
+        model = tf.keras.Sequential()
+        model.add(tf.keras.layers.Embedding(56, 64, input_length=max_train_len))
         # model_.add(tf.keras.layers.Dropout(0.2))
-        model_.add(tf.keras.layers.LSTM(config.lstm_units))
+        model.add(tf.keras.layers.LSTM(config.lstm_units))
         # model_.add(tf.keras.layers.Dropout(0.2))
-        model_.add(tf.keras.layers.Flatten())
-        model_.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
-                       metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
-
-    # Decision Tree
-    if architecture == 'DT':
-        model_ = DecisionTreeClassifier(criterion=config.criterion, ccp_alpha=config.ccp_alpha)
-
-    # Naive Bayes
-    if architecture == 'NB':
-        model_ = MultinomialNB(alpha=config.alpha, fit_prior=config.fit_prior)
-
-    # Random Forest
-    if architecture == 'RF':
-        model_ = RandomForestClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
-                                        bootstrap=config.bootstrap, n_jobs=30,
-                                        max_features=config.max_features, max_depth=30, 
-                                        min_samples_split=config.min_samples_split,
-                                        min_samples_leaf=config.min_samples_leaf)
-
-    # Extra Trees
-    if architecture == 'ET':
-        model_ = ExtraTreesClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
+        model.add(tf.keras.layers.Flatten())
+        model.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
+        model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
+                    metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
+        return model
+    
+    elif architecture == "DT":
+        return DecisionTreeClassifier(criterion=config.criterion, ccp_alpha=config.ccp_alpha)
+    
+    elif architecture == "NB":
+        return MultinomialNB(alpha=config.alpha, fit_prior=config.fit_prior)
+    
+    elif architecture == "RF":
+        return RandomForestClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
                                       bootstrap=config.bootstrap, n_jobs=30,
                                       max_features=config.max_features, max_depth=30, 
                                       min_samples_split=config.min_samples_split,
                                       min_samples_leaf=config.min_samples_leaf)
-
-    # Transformer
-    if architecture == "Transformer":
+    
+    elif architecture == "ET":
+        return ExtraTreesClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
+                                    bootstrap=config.bootstrap, n_jobs=30,
+                                    max_features=config.max_features, max_depth=30, 
+                                    min_samples_split=config.min_samples_split,
+                                    min_samples_leaf=config.min_samples_leaf)
+    
+    elif architecture == "Transformer":
         config.FEATURE_ENGINEERING = False
         config.PAD_INPUT = True
         vocab_size = config.vocab_size
@@ -169,12 +165,12 @@ def create_model(architecture, extend_model, cipher_types, max_train_len):
         x = tf.keras.layers.GlobalAveragePooling1D()(x)
         outputs = tf.keras.layers.Dense(output_layer_size, activation="softmax")(x)
 
-        model_ = tf.keras.Model(inputs=inputs, outputs=outputs)
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
-                       metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
-
-    # SVM
-    if architecture == "SVM":
+        model = tf.keras.Model(inputs=inputs, outputs=outputs)
+        model.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
+                        metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
+        return model
+    
+    elif architecture == "SVM":
         # cv_method = StratifiedKFold(n_splits=2, shuffle=True)
         # grid_search = GridSearchCV(SVC(probability=True), 
         #                             param_grid=[
@@ -187,49 +183,46 @@ def create_model(architecture, extend_model, cipher_types, max_train_len):
         
         # # Best SVM parameters:  {'C': 1, 'gamma': 0.001, 'kernel': 'linear'}
         # model_ = grid_search
-        model_ = SVC(probability=True, C=1, gamma=0.001, kernel="linear")
+        return SVC(probability=True, C=1, gamma=0.001, kernel="linear")
     
-    # SVM Rotor-only
-    if architecture == "SVM-Rotor":
+    elif architecture == "SVM-Rotor":
         pipe = Pipeline([
             ('scale', StandardScaler()),
             ('clf', SVC(probability=True, C=1, gamma=0.001, kernel="linear"))])
-        model_ = SVC(probability=True, C=1, gamma=0.001, kernel="linear")
-
-    # kNN
-    if architecture == "kNN":
-        model_ = KNeighborsClassifier(90, weights="distance", metric="euclidean")
-
-    # FFNN, NB
-    if architecture == "[FFNN,NB]":
+        return SVC(probability=True, C=1, gamma=0.001, kernel="linear")
+    
+    elif architecture == "kNN":
+        return KNeighborsClassifier(90, weights="distance", metric="euclidean")
+    
+    elif architecture == "[FFNN,NB]":
         model_ffnn = tf.keras.Sequential()
         model_ffnn.add(tf.keras.layers.Input(shape=(input_layer_size,)))
         for _ in range(config.hidden_layers):
             model_ffnn.add(tf.keras.layers.Dense(hidden_layer_size, activation='relu', use_bias=True))
         model_ffnn.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
         model_ffnn.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy",
-                           metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
+                        metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
         model_nb = MultinomialNB(alpha=config.alpha, fit_prior=config.fit_prior)
         return [model_ffnn, model_nb]
     
-    # DT, ET, RF, SVM, kNN
-    if architecture == "[DT,ET,RF,SVM,kNN]":
+    elif architecture == "[DT,ET,RF,SVM,kNN]":
         dt = DecisionTreeClassifier(criterion=config.criterion, ccp_alpha=config.ccp_alpha)
         et = ExtraTreesClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
-                                      bootstrap=config.bootstrap, n_jobs=30,
-                                      max_features=config.max_features, max_depth=30, 
-                                      min_samples_split=config.min_samples_split,
-                                      min_samples_leaf=config.min_samples_leaf)
+                                  bootstrap=config.bootstrap, n_jobs=30,
+                                  max_features=config.max_features, max_depth=30, 
+                                  min_samples_split=config.min_samples_split,
+                                  min_samples_leaf=config.min_samples_leaf)
         rf = RandomForestClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
-                                        bootstrap=config.bootstrap, n_jobs=30,
-                                        max_features=config.max_features, max_depth=30, 
-                                        min_samples_split=config.min_samples_split,
-                                        min_samples_leaf=config.min_samples_leaf)
+                                    bootstrap=config.bootstrap, n_jobs=30,
+                                    max_features=config.max_features, max_depth=30, 
+                                    min_samples_split=config.min_samples_split,
+                                    min_samples_leaf=config.min_samples_leaf)
         svm = SVC(probability=True, C=1, gamma=0.001, kernel="linear")
         knn = KNeighborsClassifier(90, weights="distance", metric="euclidean")
         return [dt, et, rf, svm, knn]
-
-    return model_
+    
+    else:
+        raise Exception(f"Could not create model. Unknown architecture '{architecture}'.")
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
