@@ -97,13 +97,18 @@ class EnsembleModel:
 
     def evaluate(self, batch, batch_ciphertexts, labels, batch_size, verbose=0):
         correct_all = 0
+        correct_k3 = 0
         prediction = self.predict(batch, batch_ciphertexts, batch_size, verbose=0)
         for i in range(0, len(prediction)):
+            max_3_predictions = np.flip(np.argsort(prediction[i]))[:3]
             if labels[i] == np.argmax(prediction[i]):
                 correct_all += 1
+            if labels[i] in max_3_predictions:
+                correct_k3 += 1
         if verbose == 1:
             print("Accuracy: %f" % (correct_all / len(prediction)))
-        return correct_all / len(prediction)
+            print("k3-Accuracy: %f" % (correct_k3 / len(prediction)))
+        return (correct_all / len(prediction), correct_k3 / len(prediction))
 
     def predict(self, statistics, ciphertexts, batch_size, verbose=0):
         predictions = []

@@ -68,10 +68,23 @@ class RotorDifferentiationEnsemble:
 
     def evaluate(self, statistics, ciphertexts, labels, batch_size, verbose=0):
         correct_all = 0
+        correct_k3 = 0
+        correct_rotor = 0
+        correct_rotor_k3 = 0
         prediction = self.predict(statistics, ciphertexts, batch_size, verbose=verbose)
         for i in range(0, len(prediction)):
+            max_3_predictions = np.flip(np.argsort(prediction[i]))[:3]
             if labels[i] == np.argmax(prediction[i]):
                 correct_all += 1
+            if labels[i] in max_3_predictions:
+                correct_k3 += 1
+            if labels[i] >= 56 and labels[i] == np.argmax(prediction[i]):
+                correct_rotor += 1
+            if labels[i] >= 56 and labels[i] in max_3_predictions:
+                correct_rotor_k3 += 1
         if verbose == 1:
             print("Accuracy: %f" % (correct_all / len(prediction)))
-        return correct_all / len(prediction)
+            print("k3-accuracy: %f" % (correct_k3 / len(prediction)))
+            print(f"Rotor accuracy: {correct_rotor / len(list(filter(lambda label: label >= 56, labels)))}")
+            print(f"Rotor k3-accuracy: {correct_rotor_k3 / len(list(filter(lambda label: label >= 56, labels)))}")
+        return (correct_all / len(prediction), correct_k3 / len(prediction))
