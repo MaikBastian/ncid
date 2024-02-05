@@ -1,4 +1,3 @@
-import logging
 import multiprocessing
 from pathlib import Path
 
@@ -7,21 +6,18 @@ import argparse
 import sys
 import time
 import shutil
-import csv
-import random
 from sklearn.model_selection import train_test_split
 import os
 import math
 import pickle
 import functools
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import GridSearchCV
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import StratifiedKFold
 import matplotlib.pyplot as plt
 from datetime import datetime
 # This environ variable must be set before all tensorflow imports!
@@ -31,10 +27,10 @@ from tensorflow.keras.metrics import SparseTopKCategoricalAccuracy
 from tensorflow.keras.optimizers import Adam  # , Adamax
 import tensorflow_datasets as tfds
 sys.path.append("../")
+from cipherTypeDetection.featureCalculations import calculate_histogram
 import cipherTypeDetection.config as config
 from cipherImplementations.cipher import OUTPUT_ALPHABET
-from cipherTypeDetection.cipherStatisticsDataset import CiphertextLine2CipherStatisticsWorker, ConfigParams, RotorCiphertextsDataset, RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CipherStatisticsDataset, TrainingBatch
-from cipherTypeDetection.featureCalculations import calculate_histogram, calculate_digrams, calculate_cipher_sequence
+from cipherTypeDetection.cipherStatisticsDataset import RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CipherStatisticsDataset, TrainingBatch
 from cipherTypeDetection.predictionPerformanceMetrics import PredictionPerformanceMetrics
 from cipherTypeDetection.miniBatchEarlyStoppingCallback import MiniBatchEarlyStopping
 from cipherTypeDetection.transformer import TransformerBlock, TokenAndPositionEmbedding, MultiHeadSelfAttention
@@ -44,12 +40,6 @@ tf.debugging.set_log_device_placement(enabled=False)
 print = functools.partial(print, flush=True)
 # for device in tf.config.list_physical_devices('GPU'):
 #    tf.config.experimental.set_memory_growth(device, True)
-
-# Used for meta-classifier pipeline
-import cipherTypeDetection.eval as cipherEval
-from cipherTypeDetection.ensembleModel import EnsembleModel
-from types import SimpleNamespace
-import pandas as pd
 
 
 def str2bool(v):
@@ -68,14 +58,15 @@ def create_model(architecture, extend_model, cipher_types, max_train_len):
     for j in range(1, 3):
         total_frequencies_size += math.pow(len(OUTPUT_ALPHABET), j)
     total_frequencies_size = int(total_frequencies_size)
+    total_frequencies_size = 38
 
     # total_ny_gram_frequencies_size = int(math.pow(len(OUTPUT_ALPHABET), 2)) * 6
 
     # old feature length: 1505
-    rotor_features = 802
-    magic = 5
+    rotor_features = 26 + 676 + 500 + 1 + 26 + 26 + 676
+    ldi_stats = 0
 
-    input_layer_size = 18 + total_frequencies_size + rotor_features + magic
+    input_layer_size = 18 - 2 + total_frequencies_size + rotor_features + ldi_stats
     output_layer_size = len(cipher_types) + len(config.ROTOR_CIPHER_TYPES)
     hidden_layer_size = int(2 * (input_layer_size / 3) + output_layer_size)
 
@@ -184,7 +175,26 @@ def create_model(architecture, extend_model, cipher_types, max_train_len):
 
     # SVM
     if architecture == "SVM":
-        model_ = SVC(probability=True, C=1, gamma=0.0001, kernel="rbf")
+        # cv_method = StratifiedKFold(n_splits=2, shuffle=True)
+        # grid_search = GridSearchCV(SVC(probability=True), 
+        #                             param_grid=[
+        # {"kernel": ["rbf", "linear"], "gamma": [1e-3, 1e-4], "C": [0.1, 1]}
+        # ],
+        #                             cv=cv_method,
+        #                             scoring="accuracy",
+        #                             refit=True,
+        #                             verbose=2)
+        
+        # # Best SVM parameters:  {'C': 1, 'gamma': 0.001, 'kernel': 'linear'}
+        # model_ = grid_search
+        model_ = SVC(probability=True, C=1, gamma=0.001, kernel="linear")
+    
+    # SVM Rotor-only
+    if architecture == "SVM-Rotor":
+        pipe = Pipeline([
+            ('scale', StandardScaler()),
+            ('clf', SVC(probability=True, C=1, gamma=0.001, kernel="linear"))])
+        model_ = SVC(probability=True, C=1, gamma=0.001, kernel="linear")
 
     # kNN
     if architecture == "kNN":
@@ -202,6 +212,7 @@ def create_model(architecture, extend_model, cipher_types, max_train_len):
         model_nb = MultinomialNB(alpha=config.alpha, fit_prior=config.fit_prior)
         return [model_ffnn, model_nb]
     
+    # DT, ET, RF, SVM, kNN
     if architecture == "[DT,ET,RF,SVM,kNN]":
         dt = DecisionTreeClassifier(criterion=config.criterion, ccp_alpha=config.ccp_alpha)
         et = ExtraTreesClassifier(n_estimators=config.n_estimators, criterion=config.criterion, 
@@ -214,7 +225,7 @@ def create_model(architecture, extend_model, cipher_types, max_train_len):
                                         max_features=config.max_features, max_depth=30, 
                                         min_samples_split=config.min_samples_split,
                                         min_samples_leaf=config.min_samples_leaf)
-        svm = SVC(probability=True, C=1, gamma=0.0001, kernel="rbf")
+        svm = SVC(probability=True, C=1, gamma=0.001, kernel="linear")
         knn = KNeighborsClassifier(90, weights="distance", metric="euclidean")
         return [dt, et, rf, svm, knn]
 
@@ -441,7 +452,7 @@ def load_plaintext_datasets_from_disk(args, cipher_types):
     
     return (train_plaintexts, train_plaintext_parameters, test_plaintexts, test_plaintext_parameters)
 
-def load_datasets_from_disk(args, cipher_types):
+def load_datasets_from_disk(args, cipher_types, max_rotor_lines):
     """Loads datasets from the file system. 
     In case of the ACA ciphers the datasets are plaintext files that need to be
     encrypted before the features can be extracted.
@@ -457,7 +468,7 @@ def load_datasets_from_disk(args, cipher_types):
     (train_rotor_ciphertexts, 
      train_rotor_ciphertexts_parameters, 
      test_rotor_ciphertexts, 
-     test_rotor_ciphertexts_parameters) = load_rotor_ciphertext_datasets_from_disk(args, cipher_types, max_lines_per_cipher=30000)
+     test_rotor_ciphertexts_parameters) = load_rotor_ciphertext_datasets_from_disk(args, cipher_types, max_lines_per_cipher=max_rotor_lines)
 
     train_ds = CipherStatisticsDataset(train_plaintexts, train_plaintext_parameters, train_rotor_ciphertexts, train_rotor_ciphertexts_parameters)
     test_ds = CipherStatisticsDataset(test_plaintexts, test_plaintext_parameters, test_rotor_ciphertexts, test_rotor_ciphertexts_parameters)
@@ -502,7 +513,7 @@ def train_model(model, args, train_ds):
         them more."""
         weights = np.ones(len(class_labels))
         first_rotor_cipher_class = len(config.CIPHER_TYPES) - len(config.ROTOR_CIPHER_TYPES)
-        weights[np.where(class_labels.numpy() > first_rotor_cipher_class)] = 2
+        weights[np.where(class_labels.numpy() >= first_rotor_cipher_class)] = 4
         return weights
     
     checkpoints_dir = Path('../data/checkpoints')
@@ -512,7 +523,8 @@ def train_model(model, args, train_ds):
     def create_checkpoint_callback():
         if not checkpoints_dir.exists():
             os.mkdir(checkpoints_dir)
-        checkpoint_file_path = checkpoints_dir / "epoch_{epoch:02d}-accuracy_{accuracy:.2f}.h5"
+        checkpoint_file_path = os.path.join(checkpoints_dir, "epoch_{epoch:02d}-accuracy_{accuracy:.2f}.h5")
+        # checkpoint_file_path = checkpoints_dir / "epoch_{epoch:02d}-accuracy_{accuracy:.2f}.h5"
 
         return tf.keras.callbacks.ModelCheckpoint(
             filepath=checkpoint_file_path,
@@ -545,7 +557,7 @@ def train_model(model, args, train_ds):
         training_batches = next(train_ds)
 
         # For architectures that only support one fit call: Sample all batches into one large batch.
-        if architecture in ("DT", "RF", "ET", "SVM", "kNN", "[DT,ET,RF,SVM,kNN]"):
+        if architecture in ("DT", "RF", "ET", "SVM", "kNN", "SVM-Rotor", "[DT,ET,RF,SVM,kNN]"):
             for training_batch in training_batches:
                 combined_batch.extend(training_batch)
             if train_ds.iteration < args.max_iter:
@@ -561,6 +573,9 @@ def train_model(model, args, train_ds):
 
             # Create small validation dataset on first iteration
             if index == 0:
+                # TODO: This does not work in case of DT, RF, etc. where on first iteration
+                # all trainings statistics and labels are combined into one large set.
+                # The validation data leaks into the training data.
                 statistics, val_data, labels, val_labels = train_test_split(statistics.numpy(), 
                                                                             labels.numpy(), 
                                                                             test_size=0.3)
@@ -571,13 +586,14 @@ def train_model(model, args, train_ds):
             train_iter -= len(training_batch) * 0.3
 
             # Decision Tree training
-            if architecture in ("DT", "RF", "ET", "SVM", "kNN"):
+            if architecture in ("DT", "RF", "ET", "SVM", "kNN", "SVM-Rotor"):
                 train_iter = len(labels) * 0.7
                 print(f"Start training the {architecture}.")
                 if architecture == "kNN":
                     # TODO: Since scikit's kNN does not support sample weights: Provide manually?
                     history = model.fit(statistics, labels)
                 else:
+                    # history = model.fit(statistics, labels)
                     history = model.fit(statistics, labels, sample_weight=sample_weights(labels))
                 if architecture == "DT":
                     plt.gcf().set_size_inches(25, 25 / math.sqrt(2))
@@ -622,7 +638,7 @@ def train_model(model, args, train_ds):
                 # time_based_decay_lrate_callback.iteration = train_iter
 
             # print for Decision Tree, Naive Bayes and Random Forests
-            if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
+            if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN", "SVM-Rotor"):
                 val_score = model.score(val_data, val_labels)
                 train_score = model.score(statistics, labels)
                 print("train accuracy: %f, validation accuracy: %f" % (train_score, val_score))
@@ -735,16 +751,36 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
     else:
         prediction_metrics = {architecture: PredictionPerformanceMetrics(model_name=architecture)}
 
+    combined_batch = TrainingBatch("mixed", [], [])
     while test_ds.iteration < args.max_iter:
-        training_batches = next(test_ds)
+        testing_batches = next(test_ds)
 
-        for training_batch in training_batches:
-            statistics, labels = training_batch.tuple()
+        # For architectures that only support one fit call: Sample all batches into one large batch.
+        if architecture in ("DT", "RF", "ET", "SVM", "kNN", "SVM-Rotor", "[DT,ET,RF,SVM,kNN]"):
+            for testing_batch in testing_batches:
+                combined_batch.extend(testing_batch)
+            if test_ds.iteration < args.max_iter:
+                print("Loaded %d ciphertexts." % test_ds.iteration)
+                continue
+            test_ds.stop_outstanding_tasks()
+            print("Loaded %d ciphertexts." % test_ds.iteration)
+            testing_batches = [combined_batch]
+
+        for testing_batch in testing_batches:
+            statistics, labels = testing_batch.tuple()
             
             # Decision Tree, Naive Bayes prediction
             if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
                 prediction = model.predict_proba(statistics)
                 prediction_metrics[architecture].add_predictions(labels, prediction)
+            if architecture == "SVM-Rotor":
+                prediction = model.predict_proba(statistics)
+                # add probability 0 to all aca labels that are missing in the prediction
+                padded_prediction = []
+                for p in list(prediction):
+                    padded = [0] * 56 + list(p)
+                    padded_prediction.append(padded)
+                prediction_metrics[architecture].add_predictions(labels, padded_prediction)
             elif architecture == "[FFNN,NB]":
                 prediction = model[0].predict(statistics, batch_size=args.batch_size, verbose=1)
                 nb_prediction = model[1].predict_proba(statistics)
@@ -854,7 +890,13 @@ def main():
     if should_download_datasets(args):
         download_datasets(args)
 
-    train_ds, test_ds = load_datasets_from_disk(args, cipher_types)
+    # For the rotor-only model, load balanced set of great performing samples from the Paper
+    # 'Classifying World War II Era Ciphers with Machine Learning' from Dalton and Stamp (in
+    # the first 900 lines of each rotor ciphertext file) and a generated set of possibly more
+    # representative ciphertexts.
+    max_rotor_lines = 2000 if architecture == "SVM-Rotor" else 10000
+
+    train_ds, test_ds = load_datasets_from_disk(args, cipher_types, max_rotor_lines)
 
     # ACA ciphers
     model = create_model_with_distribution_strategy(architecture, extend_model, 
