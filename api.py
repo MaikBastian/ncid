@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import cipherTypeDetection.eval as cipherEval
 import cipherTypeDetection.config as config
+from cipherTypeDetection.rotorDifferentiationEnsemble import RotorDifferentiationEnsemble
 from cipherTypeDetection.transformer import MultiHeadSelfAttention, TransformerBlock, TokenAndPositionEmbedding
 from cipherTypeDetection.ensembleModel import EnsembleModel
 
@@ -40,25 +41,27 @@ app.add_middleware(
 async def startup_event():
     """The models are loaded with hardcoded names. Change in future if multiple models are available."""
     model_path = "data/models"
-    models["Transformer"] = (
-        tf.keras.models.load_model(
-            os.path.join(model_path, "t96_transformer_final_100.h5"),
-            custom_objects={
-                'TokenAndPositionEmbedding': TokenAndPositionEmbedding,
-                'MultiHeadSelfAttention': MultiHeadSelfAttention,
-                'TransformerBlock': TransformerBlock}),
-        False,
-        True)
+    # models["Transformer"] = (
+    #     tf.keras.models.load_model(
+    #         os.path.join(model_path, "t96_transformer_final_100.h5"),
+    #         custom_objects={
+    #             'TokenAndPositionEmbedding': TokenAndPositionEmbedding,
+    #             'MultiHeadSelfAttention': MultiHeadSelfAttention,
+    #             'TransformerBlock': TransformerBlock}),
+    #     False,
+    #     True)
     models["FFNN"] = (
         tf.keras.models.load_model(
-            os.path.join(model_path, "t128_ffnn_final_100.h5")),
+            os.path.join(model_path, "ffnn_1000_4000000.h5")
+            # os.path.join(model_path, "t128_ffnn_final_100.h5")
+            ),
         True,
         False)
-    models["LSTM"] = (
-        tf.keras.models.load_model(
-            os.path.join(model_path, "t129_lstm_final_100.h5")),
-        False,
-        True)
+    # models["LSTM"] = (
+    #     tf.keras.models.load_model(
+    #         os.path.join(model_path, "t129_lstm_final_100.h5")),
+    #     False,
+    #     True)
     optimizer = Adam(
         learning_rate=config.learning_rate,
         beta_1=config.beta_1,
@@ -72,19 +75,21 @@ async def startup_event():
             metrics=[
                 "accuracy",
                 SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
-    # TODO add this in production when having at least 32 GB RAM
-    # with open(os.path.join(model_path, "t99_rf_final_100.h5"), "rb") as f:
-    #     models["RF"] = (pickle.load(f), True, False)
-    with open(os.path.join(model_path, "t128_nb_final_100.h5"), "rb") as f:
-        models["NB"] = (pickle.load(f), True, False)
-    with open(os.path.join(model_path, "svm-combined"), "rb") as f:
-        models["SVM-Rotor"] = (pickle.load(f), True, False)
-    with open(os.path.join(model_path, "knn-combined"), "rb") as f:
-        models["kNN-Rotor"] = (pickle.load(f), True, False)
-    # with open(os.path.join(model_path, "rf-combined"), "rb") as f:
-    #     models["RF-Rotor"] = (pickle.load(f), True, False)
-    # with open(os.path.join(model_path, "mlp-combined"), "rb") as f:
-    #     models["MLP-Rotor"] = (pickle.load(f), True, False)
+    # # TODO add this in production when having at least 32 GB RAM
+    # # with open(os.path.join(model_path, "t99_rf_final_100.h5"), "rb") as f:
+    # #     models["RF"] = (pickle.load(f), True, False)
+    # with open(os.path.join(model_path, "t128_nb_final_100.h5"), "rb") as f:
+    #     models["NB"] = (pickle.load(f), True, False)
+    # with open(os.path.join(model_path, "svm-combined"), "rb") as f:
+    #     models["SVM-Rotor"] = (pickle.load(f), True, False)
+    # with open(os.path.join(model_path, "knn-combined"), "rb") as f:
+    #     models["kNN-Rotor"] = (pickle.load(f), True, False)
+    # # with open(os.path.join(model_path, "rf-combined"), "rb") as f:
+    # #     models["RF-Rotor"] = (pickle.load(f), True, False)
+    # # with open(os.path.join(model_path, "mlp-combined"), "rb") as f:
+    # #     models["MLP-Rotor"] = (pickle.load(f), True, False)
+    with open(os.path.join(model_path, "svm_rotor_only.h5"), "rb") as f:
+        models["SVM-Rotor"] = pickle.load(f)
 
 class ArchitectureError(Exception):
     def __init__(self, response):
@@ -163,37 +168,45 @@ async def evaluate_single_line_ciphertext(ciphertext: str, architecture: List[st
             for architecture in architectures 
             if architecture in ("Transformer", "FFNN", "LSTM", "RF", "NB")]
         
-        aca_cipher_types = get_aca_cipher_types_to_use()
+        aca_cipher_types = list(range(56))
         rotor_cipher_types = list(range(56, 61))
         
         if len(architectures) == 0:
             return {}
         elif len(architectures) == 1:
-            model, feature_engineering, pad_input = models[architectures[0]]
+            architecture = architectures[0]
+            model, feature_engineering, pad_input = models[architecture]
             config.FEATURE_ENGINEERING = feature_engineering
             config.PAD_INPUT = pad_input
         else:
-            cipher_indices = aca_cipher_types + rotor_cipher_types
             model_list = []
             architecture_list = []
             for architecture in architectures:
                 model_list.append(models[architecture][0])
                 architecture_list.append(architecture)
+            architecture = "Ensemble"
             model = EnsembleModel(
                 model_list,
                 architecture_list,
                 "weighted",
-                cipher_indices)
+                aca_cipher_types) # TODO: Use cipher_indices once newest models are used!
         
+        # Embed all models in RotorDifferentiationEnsemble to improve recognition of rotor ciphers
+        rotor_only_model = models["SVM-Rotor"]
+        model = RotorDifferentiationEnsemble(architecture, model, rotor_only_model)
+        architecture = "Ensemble"
+        
+        all_cipher_types = aca_cipher_types + rotor_cipher_types
+        cipher_names = [config.CIPHER_TYPES[cipher_index] for cipher_index in all_cipher_types]
+
         eval_args = SimpleNamespace(
             ciphertext=ciphertext,
             # todo: needs fileupload first (either set ciphertext OR file, never both)
             file=None,
-            ciphers=aca_cipher_types + rotor_cipher_types,
+            ciphers=cipher_names,
             batch_size=128,
             verbose=False
         )
-        architecture = architectures[0] if len(architectures) == 1 else "Ensemble"
         prediction = cipherEval.predict_single_line(eval_args, model, architecture)
     
         return {"success": True, "payload": prediction}
@@ -206,11 +219,3 @@ async def evaluate_single_line_ciphertext(ciphertext: str, architecture: List[st
                             "error_msg": repr(e)}, status_code=500)
         # return JSONResponse(None, status_code=500)
 
-
-###########################################################
-
-def get_aca_cipher_types_to_use():
-    cipher_types = []
-    for cipher_index in range(56):
-        cipher_types.append(config.CIPHER_TYPES[cipher_index])
-    return cipher_types
