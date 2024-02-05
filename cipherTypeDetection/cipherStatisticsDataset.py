@@ -239,6 +239,8 @@ class CipherStatisticsDataset:
         plaintext_inputs_exhausted = False
 
         worker = None
+        input_batch = None
+
         for index in range(number_of_processes):
             # start rotor and plaintext worker alternatly after one another
             if index % 2 == 0:
@@ -258,7 +260,7 @@ class CipherStatisticsDataset:
                     plaintext_inputs_exhausted = True
                     continue
 
-            if worker:
+            if worker and input_batch:
                 batch = self._pool.apply_async(worker.perform, 
                                                 (input_batch, ),
                                                 error_callback=error_callback)
