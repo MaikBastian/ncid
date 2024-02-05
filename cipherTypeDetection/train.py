@@ -804,201 +804,6 @@ def expand_cipher_groups(cipher_types):
             expanded.append(config.CIPHER_TYPES[i])
     return expanded
 
-def aca_training_pipeline(args, cipher_types):
-    extend_model = args.extend_model
-    architecture = args.architecture
-    if extend_model is not None:
-        if architecture not in ('FFNN', 'CNN', 'LSTM'):
-            # TODO: Also holds for SVM, kNN?
-            print('ERROR: Models with the architecture %s can not be extended!' % architecture,
-                  file=sys.stderr)
-            sys.exit(1)
-        if len(os.path.splitext(extend_model)) != 2 or os.path.splitext(extend_model)[1] != '.h5':
-            print('ERROR: The extended model name must have the ".h5" extension!', file=sys.stderr)
-            sys.exit(1)
-
-    cipher_types = expand_cipher_groups(cipher_types)
-
-    if args.train_dataset_size * args.dataset_workers > args.max_iter:
-        print("ERROR: --train_dataset_size * --dataset_workers must not be bigger than --max_iter. "
-              "In this case it was %d > %d" % 
-                  (args.train_dataset_size * args.dataset_workers, args.max_iter), 
-              file=sys.stderr)
-        sys.exit(1)
-
-    if should_download_datasets(args):
-        download_datasets(args)
-
-    train_ds, test_ds = load_datasets_from_disk(args, cipher_types)
-
-    # ACA ciphers
-    model = create_model_with_distribution_strategy(architecture, extend_model, 
-                                                    cipher_types, args.max_train_len)
-    early_stopping_callback, train_iter, training_stats = train_model(model, args, train_ds)
-    save_model(model, args)
-    prediction_stats = predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
-    
-    print(training_stats)
-    print(prediction_stats)
-
-def rotor_training_pipeline(args):
-    def create_ffnn():
-        optimizer = Adam(
-            learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, 
-            epsilon=config.epsilon, amsgrad=config.amsgrad)
-        
-        total_frequencies_size = 0
-        for j in range(1, 3):
-            total_frequencies_size += math.pow(len(OUTPUT_ALPHABET), j)
-        total_frequencies_size = int(total_frequencies_size)
-        total_frequencies_size = 38
-
-        # total_ny_gram_frequencies_size = int(math.pow(len(OUTPUT_ALPHABET), 2)) * 6
-
-        # old feature length: 1505
-        rotor_features = 26 + 676 + 1 + 500 + 26 + 26 + 676
-        ldi_stats = 0
-
-        input_layer_size = 18 - 2 + total_frequencies_size + rotor_features + ldi_stats
-        # input_layer_size = 26 + 676 + 500
-        output_layer_size = 61
-        hidden_layer_size = int(2 * (input_layer_size / 3) + output_layer_size)
-
-        model_ = tf.keras.Sequential()
-        model_.add(tf.keras.layers.Input(shape=(input_layer_size,)))
-        for _ in range(config.hidden_layers):
-            model_.add(tf.keras.layers.Dense(hidden_layer_size, activation='relu', use_bias=True))
-        model_.add(tf.keras.layers.Dense(output_layer_size, activation='softmax'))
-        model_.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", 
-                       metrics=["accuracy", SparseTopKCategoricalAccuracy(k=3, name="k3_accuracy")])
-        return model_
-        
-    # create model
-    # cv_method = StratifiedKFold(n_splits=2, shuffle=True)
-    # model = GridSearchCV(SVC(probability=True), 
-    #                             param_grid=[
-    # {"kernel": ["rbf", "linear"], "gamma": [1e-3, 1e-4], "C": [0.1, 1, 10]}
-    # ],
-    #                             cv=cv_method,
-    #                             scoring="accuracy",
-    #                             refit=True,
-    #                             verbose=2)
-    model = SVC(probability=True, C=10, gamma=0.001, kernel="rbf") 
-    # model2 = MLPClassifier(random_state = 1, early_stopping=True, hidden_layer_sizes=(500,),
-    #     activation='relu',
-    #     solver='adam',
-    #     alpha=0.0001,
-    #     learning_rate='constant', # 'constant'
-    #     max_iter=200)
-    # model2 = create_ffnn()
-    # model2 = RandomForestClassifier(random_state=42, n_estimators=160, criterion="entropy", max_depth=7, max_features="sqrt")
-
-    # load rotor ciphertexts from disk
-    print("Loading datasets...")
-    (train_ciphertexts, 
-     train_ciphertexts_parameters, 
-     test_ciphertexts, 
-     test_ciphertexts_parameters) = load_rotor_ciphertext_datasets_from_disk(args, [config.CIPHER_TYPES[i] for i in range(56, 61)], max_lines_per_cipher=1000)
-
-    logger = multiprocessing.log_to_stderr(logging.INFO)
-    train_dataset = RotorCiphertextsDataset(train_ciphertexts, train_ciphertexts_parameters, logger)
-    test_dataset = RotorCiphertextsDataset(test_ciphertexts, test_ciphertexts_parameters, logger)
-    
-    def process_ciphertext(ciphertext):
-        def map_text_into_numberspace(text):
-            alphabet = "abcdefghijklmnopqrstuvwxyz"
-            result = []
-            for index in range(len(text)):
-                try:
-                    result.append(alphabet.index(text[index]))
-                except ValueError:
-                    raise Exception(f"Ciphertext contains unknown character '{text[index]}'. "
-                                    f"Known characters are: '{alphabet}'.")
-            return result
-        cleaned = ciphertext.strip().replace(' ', '').replace('\n', '')
-        mapped = map_text_into_numberspace(cleaned.lower())
-        return mapped
-    
-    # get features from training ciphertexts
-    training_labels, training_statistics = [], []
-    for training_batch in train_dataset:
-        for ciphertext, label in training_batch:
-            label = config.CIPHER_TYPES.index(label)
-            ciphertext = process_ciphertext(ciphertext)
-            # statistics = (calculate_histogram(ciphertext) 
-            #               + calculate_digrams(ciphertext) 
-            #               + calculate_cipher_sequence(ciphertext))
-            # TODO: Try!
-            statistics = calculate_statistics(ciphertext)
-            training_labels.append(label)
-            training_statistics.append(statistics)
-        print(f"Loaded {len(training_labels)} samples")
-        if len(training_labels) >= args.max_iter:
-            break
-    
-    training_statistics, val_statistics, training_labels, val_labels = train_test_split(training_statistics, training_labels, test_size=0.2)
-    
-    # train model
-    print("Training model")
-    # scaler = StandardScaler()
-    # scaled_statistics = scaler.fit_transform(training_statistics)
-    model.fit(training_statistics, training_labels)
-    # model2.fit(training_statistics, training_labels, batch_size=512)
-
-    print(f"Score: {model.score(val_statistics, val_labels)}")
-
-    save_model(model, args)
-    # args.model_name = "ffnn_rotor_only.h5"
-    # args.architecture = "FFNN"
-    # save_model(model2, args)
-
-    # get features from testing ciphertexts
-    testing_labels, testing_statistics = [], []
-    for testing_batch in test_dataset:
-        for ciphertext, label in testing_batch:
-            label = config.CIPHER_TYPES.index(label)
-            ciphertext = process_ciphertext(ciphertext)
-            # statistics = (calculate_histogram(ciphertext) 
-            #               + calculate_digrams(ciphertext) 
-            #               + calculate_cipher_sequence(ciphertext))
-            statistics = calculate_statistics(ciphertext)
-            testing_labels.append(label)
-            testing_statistics.append(statistics)
-        if len(testing_labels) >= args.max_iter * 0.25:
-            break
-
-    score1 = model.score(testing_statistics, testing_labels)
-    # score2 = model2.score(testing_statistics, testing_labels)
-    print(f"SVM accuracy: {score1}")
-    # print(f"FFNN accuracy: {score2}")
-
-    # get predictions from trained model
-    predictions = model.predict_proba(testing_statistics)
-    # pad predictions with leading aca ciphers and probability of 0
-    padded_predictions = []
-    for prediction in list(predictions):
-        padded_prediction = [0] * 56 + list(prediction)
-        padded_predictions.append(padded_prediction)
-    
-    # evaluate model with the predictions and expected labels
-    metrics = PredictionPerformanceMetrics(model_name="Rotor-SVM")
-    metrics.add_predictions(testing_labels, padded_predictions)
-    metrics.print_evaluation()
-
-    # # get predictions from trained model
-    # predictions2 = model2.predict_proba(testing_statistics)
-    # # pad predictions with leading aca ciphers and probability of 0
-    # # padded_predictions2 = []
-    # # for prediction2 in list(predictions2):
-    # #     padded_prediction2 = [0] * 56 + list(prediction2)
-    # #     padded_predictions2.append(padded_prediction2)
-
-    # # evaluate model with the predictions and expected labels
-    # metrics = PredictionPerformanceMetrics(model_name="Rotor-FFNN")
-    # metrics.add_predictions(testing_labels, predictions2)
-    # metrics.print_evaluation()
-
-
 def main():
     # Don't fork processes to keep memory footprint low. 
     multiprocessing.set_start_method("spawn")
@@ -1023,15 +828,43 @@ def main():
     architecture = args.architecture
     cipher_types = args.ciphers.split(',')
 
-    aca_architectures = ("LSTM", "FFNN", "CNN", "RF", "ET", "DT", "NB", "Transformer", 
-                            "SVM", "kNN", "[FFNN,NB]", "[DT,ET,RF,SVM,kNN]")
-    if architecture in aca_architectures:
-        aca_training_pipeline(args, cipher_types)
-    elif architecture in ("SVM-Rotor", "kNN-Rotor", "RF-Rotor"):
-        rotor_training_pipeline(args)
-    else:
-        print("Unknown architecture")
+    extend_model = args.extend_model
+    architecture = args.architecture
+    if extend_model is not None:
+        if architecture not in ('FFNN', 'CNN', 'LSTM'):
+            # TODO: Also holds for SVM, kNN?
+            print('ERROR: Models with the architecture %s can not be extended!' % architecture,
+                  file=sys.stderr)
+            sys.exit(1)
+        if len(os.path.splitext(extend_model)) != 2 or os.path.splitext(extend_model)[1] != '.h5':
+            print('ERROR: The extended model name must have the ".h5" extension!', file=sys.stderr)
+            sys.exit(1)
+
+    cipher_types = expand_cipher_groups(cipher_types)
+    if architecture == "SVM-Rotor":
+        cipher_types = [config.CIPHER_TYPES[i] for i in range(56, 61)]
+
+    if args.train_dataset_size * args.dataset_workers > args.max_iter:
+        print("ERROR: --train_dataset_size * --dataset_workers must not be bigger than --max_iter. "
+              "In this case it was %d > %d" % 
+                  (args.train_dataset_size * args.dataset_workers, args.max_iter), 
+              file=sys.stderr)
         sys.exit(1)
+
+    if should_download_datasets(args):
+        download_datasets(args)
+
+    train_ds, test_ds = load_datasets_from_disk(args, cipher_types)
+
+    # ACA ciphers
+    model = create_model_with_distribution_strategy(architecture, extend_model, 
+                                                    cipher_types, args.max_train_len)
+    early_stopping_callback, train_iter, training_stats = train_model(model, args, train_ds)
+    save_model(model, args)
+    prediction_stats = predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
+    
+    print(training_stats)
+    print(prediction_stats)
 
 if __name__ == "__main__":
     main()    
