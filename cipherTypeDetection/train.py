@@ -20,6 +20,7 @@ from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 import matplotlib.pyplot as plt
 from datetime import datetime
+
 # This environ variable must be set before all tensorflow imports!
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
@@ -47,6 +48,23 @@ def str2bool(v):
 
 
 def create_model(architecture, extend_model, output_layer_size, max_train_len):
+    """
+    Creates an un-trained model to use in the training process. 
+
+    The kind of model that is returned, depends on the provided architecture and
+    the `extend_model` flag. 
+
+    Parameters
+    ----------
+    architecture : str
+        The architecture of the model to create. 
+    extend_model
+        When `extend_model` is not None and architecure in ('FFNN', 'CNN', 'LSTM'), 
+        the `extend_model` will be further trained.
+    output_layer_size : int
+        Defines the size of the output layer of the neural networks
+
+    """
     optimizer = Adam(
         learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, 
         epsilon=config.epsilon, amsgrad=config.amsgrad)
@@ -306,13 +324,13 @@ def parse_arguments():
 
     return parser.parse_args()
     
-def should_download_datasets(args):
+def should_download_plaintext_datasets(args):
     """Determines if the plaintext datasets should be loaded"""
     return (args.download_dataset and 
             not os.path.exists(args.plaintext_input_directory) and 
             args.plaintext_input_directory == os.path.abspath('../data/gutenberg_en'))
 
-def download_datasets(args):
+def download_plaintext_datasets(args):
     """Downloads plaintexts and saves them in the plaintext_input_directory"""
     print("Downloading Datsets...")
     checksums_dir = '../data/checksums/'
@@ -348,6 +366,37 @@ def download_datasets(args):
     print("Datasets Downloaded.")
 
 def load_rotor_ciphertext_datasets_from_disk(args, requested_cipher_types, *, max_lines_per_cipher):
+    """
+    Load ciphertext input data for rotor ciphertexts from disk.
+
+    This method (in contrast to `load_plaintext_datasets_from_disk`) loads the data 
+    immediately from disk. Currently this does not take too long, since the input files
+    and the number of ciphers that need ciphertexts as input for the feature extraction 
+    are limited. (If this method should lazily load ciphertexts, `RotorCiphertextsDataset` 
+    needs to be adapted.)
+
+    Parameters
+    ----------
+    args : 
+        The arguments parsed by the `ArgumentParser`. See `parse_arguments()`.
+    requested_cipher_types : list
+        A list of cipher types to provide as parameters to the `CipherStatisticsDataset`.
+        The list is filtered and only rotor ciphers are used as parameters.
+    max_lines_per_cipher : int
+        The number of lines to load from each ciphertext file. Can be used to limit
+        memory usage, or the composition of the ciphertext datasets. (Some were provided
+        with the code to the paper 'Classifying World War II Era Ciphers with Machine 
+        Learning' by Dalton and Stamp and some were generated. See the README.md file
+        in `data/rotor_ciphertexts/`)
+
+    Returns
+    -------
+    tuple[list, RotorCiphertextsDatasetParameters, list, RotorCiphertextsDatasetParameters]
+        A tuple with the training and testing ciphertexts as well as their
+        `RotorCiphertextsDatasetParameters` that are both provided to the 
+        `CipherStatisticsDataset`s for training and testing.
+    """
+
     def validate_ciphertext_path(ciphertext_path, cipher_types):
         """Check if the filename of the file at `ciphertext_path` matches the 
         names inside `cipher_types`."""
@@ -362,6 +411,9 @@ def load_rotor_ciphertext_datasets_from_disk(args, requested_cipher_types, *, ma
     non_rotor_ciphers = [type for type in requested_cipher_types if type not in rotor_cipher_types]
     cipher_types = [type for type in requested_cipher_types if type in rotor_cipher_types]
     
+
+    # Load all ciphertexts at `args.rotor_input_directory` and add a label 
+    # matching the filename.
     rotor_cipher_dir = args.rotor_input_directory
     rotor_ciphertexts = []
     dir_name = os.listdir(rotor_cipher_dir)
@@ -406,6 +458,9 @@ def load_rotor_ciphertext_datasets_from_disk(args, requested_cipher_types, *, ma
         amount_of_samples_per_cipher = args.train_dataset_size // number_of_aca_ciphers
         rotor_dataset_batch_size = amount_of_samples_per_cipher * number_of_rotor_ciphers
 
+    # Create dataset parameters, which will be used for creating a `CipherStatisticsDataset`.
+    # This class will provide an iterator in `train_model` to convert the plaintext files
+    # (applying the provided options) into statistics (features) used for training.
     train_rotor_ciphertexts_parameters = RotorCiphertextsDatasetParameters(config.ROTOR_CIPHER_TYPES, 
                                                             rotor_dataset_batch_size,
                                                             args.dataset_workers, 
@@ -419,14 +474,41 @@ def load_rotor_ciphertext_datasets_from_disk(args, requested_cipher_types, *, ma
                                                             args.max_test_len,
                                                             generate_evalutation_data=False)
     
+    # Return the tuples of training and testing rotor_ciphertexts as well as the parameter
+    # for initializing the `CipherStatisticsDataset`s.
     return (train_rotor_ciphertexts, train_rotor_ciphertexts_parameters, 
             test_rotor_ciphertexts, test_rotor_ciphertexts_parameters)
 
-    # Check if all aca ciphers are in the required cipher_types. Otherwise return empty lists.
 def load_plaintext_datasets_from_disk(args, requested_cipher_types):
+    """
+    Gets all plaintext paths found in `args.plaintext_input_directory`, and converts
+    them into training and testing list and parameters, used to create 
+    `CipherStatisticsDataset`s.
+
+    This method does not load the contents of the plaintext files. This is done 
+    lazily by the `CipherStatisticsDataset`.
+
+    Parameters
+    ----------
+        args :
+            The arguments parsed by the `ArgumentParser`. See `parse_arguments()`.
+        requested_cipher_types : list
+            A list of cipher types to provide as parameters to the `CipherStatisticsDataset`.
+            The list is filtered and only ACA ciphers are used as parameters, since the features
+            of rotor ciphers currently have to be extracted from ciphertext files.
+        
+    Returns
+    -------
+    tuple[list, PlaintextPathsDatasetParameters, list, PlaintextPathsDatasetParameters]
+        A tuple with the training and testing plaintext paths as well as their
+        `PlaintextPathsDatasetParameters` that are both provided to the 
+        `CipherStatisticsDataset`s for training and testing.
+    """
+    # Filter cipher_types to exclude non-plaintext ciphers
     aca_cipher_types = [config.CIPHER_TYPES[i] for i in range(56)]
     cipher_types = [type for type in requested_cipher_types if type in aca_cipher_types]
 
+    # Get all paths to plaintext files in the `plaintext_input_directory`
     plaintext_files = []
     dir_name = os.listdir(args.plaintext_input_directory)
     for name in dir_name:
@@ -434,9 +516,13 @@ def load_plaintext_datasets_from_disk(args, requested_cipher_types):
         if os.path.isfile(path):
             plaintext_files.append(path)
     
+    # Use some plaintext for training and others for testing
     train_plaintexts, test_plaintexts = train_test_split(plaintext_files, test_size=0.05, 
                                                          random_state=42, shuffle=True)
     
+    # Create dataset parameters, which will be used for creating a `CipherStatisticsDataset`.
+    # This class will provide an iterator in `train_model` to convert the plaintext files
+    # (applying the provided options) into statistics (features) used for training.
     train_plaintext_parameters = PlaintextPathsDatasetParameters(cipher_types, args.train_dataset_size, 
                                                 args.min_train_len, args.max_train_len,
                                                 args.keep_unknown_symbols, args.dataset_workers)
@@ -444,17 +530,44 @@ def load_plaintext_datasets_from_disk(args, requested_cipher_types):
                                                args.min_test_len, args.max_test_len,
                                                args.keep_unknown_symbols, args.dataset_workers)
     
+    # Return the training and testing plaintexts as well as their parameters
     return (train_plaintexts, train_plaintext_parameters, test_plaintexts, test_plaintext_parameters)
 
-    """Loads datasets from the file system. 
 def load_datasets_from_disk(args, requested_cipher_types, max_rotor_lines):
-    In case of the ACA ciphers the datasets are plaintext files that need to be
-    encrypted before the features can be extracted.
-    In case of the rotor ciphers there are already encrypted ciphertext files 
-    that can directly be used to extract the features.
     """
+    Loads training and testing data from the file system. 
+
+    In case of the ACA ciphers the datasets are plaintext files that need to be
+    encrypted before the features can be extracted. In case of the rotor ciphers 
+    there are already encrypted ciphertext files that can directly be used to 
+    extract the features.
+    To simplify the training code, both kinds of input data are returned in 
+    `CipherStatisticsDataset`s that provide an iterator interface, returning
+    `TrainingBatch`es of the requested size on each `next()` call.
+    Plaintext input is loaded lazily, while ciphertexts currently are loaded 
+    immediately.
+
+    Parameters
+    ----------
+    args :
+        The parsed commandline arguments. See also `parse_arguments()`.
+    requested_cipher_types : list
+        A list of the requested cipher types. These are provided as parameters to
+        the returned `CipherStatisticsDataset`s as well as for selection of input
+        files.
+    max_rotor_lines : int
+        Limits the amount of input lines loaded from ciphertext files. 
+
+    Returns
+    -------
+    tuple[CipherStatisticsDataset]
+        Training and testing `CipherStatisticsDataset` that lazily calculate the
+        features for the input data on `next()` calls.
+    """
+
     print("Loading Datasets...")
     
+    # Load the plaintext file paths and the rotor ciphertexts from disk.
     (train_plaintexts, 
      train_plaintext_parameters, 
      test_plaintexts, 
@@ -467,6 +580,8 @@ def load_datasets_from_disk(args, requested_cipher_types, max_rotor_lines):
                                                                                    requested_cipher_types, 
                                                                                    max_lines_per_cipher=max_rotor_lines)
 
+    # Convert the training and testing ciphertexts and plaintexts, as well as 
+    # their parameters into `CipherStatisticsDataset`s.
     train_ds = CipherStatisticsDataset(train_plaintexts, train_plaintext_parameters, train_rotor_ciphertexts, train_rotor_ciphertexts_parameters)
     test_ds = CipherStatisticsDataset(test_plaintexts, test_plaintext_parameters, test_rotor_ciphertexts, test_rotor_ciphertexts_parameters)
 
@@ -474,7 +589,10 @@ def load_datasets_from_disk(args, requested_cipher_types, max_rotor_lines):
         print("WARNING: the --train_dataset_size parameter must be dividable by the amount of --ciphers  and the length configured "
               "KEY_LENGTHS in config.py. The current key_lengths_count is %d" % 
                   train_ds.key_lengths_count, file=sys.stderr)
+        
     print("Datasets loaded.\n")
+
+    # Return `CipherStatisticsDataset`s for training and testing.
     return train_ds, test_ds
     
 def create_model_with_distribution_strategy(architecture, extend_model, output_layer_size, max_train_len):
@@ -502,12 +620,33 @@ def create_model_with_distribution_strategy(architecture, extend_model, output_l
     return model
     
 def train_model(model, args, train_ds):
-    """Trains the model"""
+    """
+    Trains the model with the given training dataset.
+
+    Depending on the value of `args.architecture` a different approach is 
+    taken to train the model. Some architectures need to be trained in one
+    iteration, while others can be trained with multiple input batches. 
+    While the training is in progress, status messages are logged to 
+    stdout to indicate the amount of seen input data as well as the current
+    accuracy of the trained model.
+
+    Parameters
+    ----------
+    model :
+        The model that will be trained. Needs to match `args.architecture`.
+    args :
+        Commandline arguments entered by the user. See also: `parse_arguments()`.
+    train_ds :
+        A `CipherStatisticsDataset` providing the features to use for training.
+
+    Returns
+    -------
+    tuple
+    """
 
     def sample_weights(class_labels):
-        """Rotor ciphers will get a weight of 2, aca ciphers the default 1. Since the training
-        dataset for rotor ciphers has less entries, this instructs the ML algorithms to remember
-        them more."""
+        """Rotor ciphers will get a weight of 4, aca ciphers the default 1. This 
+        should help the ML algorithms to better recognize these rotor ciphers."""
         weights = np.ones(len(class_labels))
         first_rotor_cipher_class = len(config.CIPHER_TYPES) - len(config.ROTOR_CIPHER_TYPES)
         weights[np.where(class_labels.numpy() >= first_rotor_cipher_class)] = 4
@@ -518,10 +657,11 @@ def train_model(model, args, train_ds):
         shutil.rmtree(checkpoints_dir)
 
     def create_checkpoint_callback():
+        """Provides a `keras` `ModelCheckpoint` used to periodically save a model in training"""
         if not checkpoints_dir.exists():
             os.mkdir(checkpoints_dir)
-        checkpoint_file_path = os.path.join(checkpoints_dir, "epoch_{epoch:02d}-accuracy_{accuracy:.2f}.h5")
-        # checkpoint_file_path = checkpoints_dir / "epoch_{epoch:02d}-accuracy_{accuracy:.2f}.h5"
+        checkpoint_file_path = os.path.join(checkpoints_dir, 
+                                            "epoch_{epoch:02d}-accuracy_{accuracy:.2f}.h5")
 
         return tf.keras.callbacks.ModelCheckpoint(
             filepath=checkpoint_file_path,
@@ -532,16 +672,22 @@ def train_model(model, args, train_ds):
             save_freq=100)
 
     print('Training model...')
+
     delete_previous_checkpoints()
 
-    architecture = args.architecture
-
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir='../data/logs', update_freq='epoch')
-    early_stopping_callback = MiniBatchEarlyStopping(
-        min_delta=1e-5, patience=250, monitor='accuracy', mode='max', restore_best_weights=True)
-    # time_based_decay_lrate_callback = TimeBasedDecayLearningRateScheduler(args.train_dataset_size)
+    # Create callbacks for tensorflow models
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir='../data/logs', 
+                                                          update_freq='epoch')
+    early_stopping_callback = MiniBatchEarlyStopping(min_delta=1e-5, 
+                                                     patience=250, 
+                                                     monitor='accuracy', 
+                                                     mode='max', 
+                                                     restore_best_weights=True)
     custom_step_decay_lrate_callback = CustomStepDecayLearningRateScheduler(early_stopping_callback)
     checkpoint_callback = create_checkpoint_callback()
+
+    # Initialize variables
+    architecture = args.architecture
     start_time = time.time()
     train_iter = 0
     train_epoch = 0
@@ -550,6 +696,8 @@ def train_model(model, args, train_ds):
     training_batches = None
     combined_batch = TrainingBatch("mixed", [], [])
     classes = list(range(len(config.CIPHER_TYPES)))
+
+    # Perform main training loop while the iterations don't exceed the user provided max_iter
     while train_ds.iteration < args.max_iter:
         training_batches = next(train_ds)
 
@@ -582,7 +730,7 @@ def train_model(model, args, train_ds):
                 val_labels = tf.convert_to_tensor(val_labels)
             train_iter -= len(training_batch) * 0.3
 
-            # Decision Tree training
+            # scikit-learn architectures:
             if architecture in ("DT", "RF", "ET", "SVM", "kNN", "SVM-Rotor"):
                 train_iter = len(labels) * 0.7
                 print(f"Start training the {architecture}.")
@@ -601,21 +749,29 @@ def train_model(model, args, train_ds):
 
             # Naive Bayes training
             elif architecture == "NB":
-                history = model.partial_fit(statistics, labels, classes=classes,
+                history = model.partial_fit(statistics, 
+                                            labels, 
+                                            classes=classes,
                                             sample_weight=sample_weights(labels))
 
-            # FFNN, NB
+            # Ensemble: [FFNN,NB]
             elif architecture == "[FFNN,NB]":
-                history = model[0].fit(statistics, labels, batch_size=args.batch_size, 
-                                       validation_data=(val_data, val_labels), epochs=args.epochs,
+                history = model[0].fit(statistics, 
+                                       labels, 
+                                       batch_size=args.batch_size, 
+                                       validation_data=(val_data, val_labels), 
+                                       epochs=args.epochs,
                                        sample_weight=sample_weights(labels),
-                                       callbacks=[early_stopping_callback, tensorboard_callback,    
-                                                  custom_step_decay_lrate_callback, checkpoint_callback])
-                # time_based_decay_lrate_callback.iteration = train_iter
-                history = model[1].partial_fit(statistics, labels, classes=classes, 
+                                       callbacks=[early_stopping_callback, 
+                                                  tensorboard_callback,    
+                                                  custom_step_decay_lrate_callback, 
+                                                  checkpoint_callback])
+                history = model[1].partial_fit(statistics, 
+                                               labels, 
+                                               classes=classes, 
                                                sample_weight=sample_weights(labels))
             
-            # DT, ET, RF, SVM, kNN
+            # Ensemble: [DT,ET,RF,SVM,kNN]
             elif architecture == "[DT,ET,RF,SVM,kNN]":
                 train_iter = len(labels) * 0.7
                 print(f"Start training the {architecture}.")
@@ -627,12 +783,15 @@ def train_model(model, args, train_ds):
                 print(f"Trained model {len(model)} of {len(model)}")
 
             else:
-                history = model.fit(statistics, labels, batch_size=args.batch_size, 
-                                    validation_data=(val_data, val_labels), epochs=args.epochs,
+                history = model.fit(statistics, labels, 
+                                    batch_size=args.batch_size, 
+                                    validation_data=(val_data, val_labels), 
+                                    epochs=args.epochs,
                                     sample_weight=sample_weights(labels),
-                                    callbacks=[early_stopping_callback, tensorboard_callback, 
-                                               custom_step_decay_lrate_callback, checkpoint_callback])
-                # time_based_decay_lrate_callback.iteration = train_iter
+                                    callbacks=[early_stopping_callback, 
+                                               tensorboard_callback, 
+                                               custom_step_decay_lrate_callback, 
+                                               checkpoint_callback])
 
             # print for Decision Tree, Naive Bayes and Random Forests
             if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN", "SVM-Rotor"):
@@ -649,10 +808,13 @@ def train_model(model, args, train_ds):
                 for m in model:
                     val_score = m.score(val_data, val_labels)
                     train_score = m.score(statistics, labels)
-                    print(f"{type(m).__name__}: train accuracy: {train_score}, validation accuracy: {val_score}")
+                    print(f"{type(m).__name__}: train accuracy: {train_score}, "
+                          f"validation accuracy: {val_score}")
 
             if train_ds.epoch > 0:
-                train_epoch = train_ds.iteration // ((train_iter + train_ds.batch_size * train_ds.dataset_workers) // train_ds.epoch)
+                train_epoch = (train_ds.iteration 
+                               // ((train_iter + train_ds.batch_size * train_ds.dataset_workers) 
+                               // train_ds.epoch))
                 
             print("Epoch: %d, Iteration: %d" % (train_epoch, train_iter))
             if train_iter >= args.max_iter or early_stopping_callback.stop_training:
@@ -663,15 +825,20 @@ def train_model(model, args, train_ds):
             break
 
     elapsed_training_time = datetime.fromtimestamp(time.time()) - datetime.fromtimestamp(start_time)
-    training_stats = 'Finished training in %d days %d hours %d minutes %d seconds with %d iterations and %d epochs.\n' % (
-        elapsed_training_time.days, elapsed_training_time.seconds // 3600, 
-        (elapsed_training_time.seconds // 60) % 60,
-        elapsed_training_time.seconds % 60, train_iter, train_epoch)
+    training_stats = ("Finished training in %d days %d hours %d minutes %d seconds "
+                      "with %d iterations and %d epochs.\n" 
+                      % (elapsed_training_time.days, 
+                         elapsed_training_time.seconds // 3600, 
+                         (elapsed_training_time.seconds // 60) % 60,
+                         elapsed_training_time.seconds % 60, 
+                         train_iter, 
+                         train_epoch))
     print(training_stats)
     return early_stopping_callback, train_iter, training_stats
         
 def save_model(model, args):
-    """Saves the model"""
+    """Writes the model and the commandline arguments to disk."""
+
     print('Saving model...')
     architecture = args.architecture
     if not os.path.exists(args.save_directory):
@@ -684,25 +851,34 @@ def save_model(model, args):
     else:
         model_name = args.model_name
     model_path = os.path.join(args.save_directory, model_name)
+
     if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
         model.save(model_path)
+
     elif architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN", "SVM-Rotor"):
         with open(model_path, "wb") as f:
             # this gets very large
             pickle.dump(model, f)
+
     elif architecture == "[FFNN,NB]":
         model[0].save('../data/models/' + model_path.split('.')[0] + "_ffnn.h5")
         with open('../data/models/' + model_path.split('.')[0] + "_nb.h5", "wb") as f:
             # this gets very large
             pickle.dump(model[1], f)
+
     elif architecture == "[DT,ET,RF,SVM,kNN]":
         for index, name in enumerate(["dt","et","rf","svm","knn"]):
+            # TODO: Are these files actually in the h5 format? Probably not!
             with open('../data/models/' + model_path.split('.')[0] + f"_{name}.h5", "wb") as f:
                 # this gets very large
                 pickle.dump(model[index], f)
+
+    # Write user provided commandline arguments into mode path
     with open('../data/' + model_path.split('.')[0] + '_parameters.txt', 'w') as f:
         for arg in vars(args):
             f.write("{:23s}= {:s}\n".format(arg, str(getattr(args, arg))))
+
+    # Remove logs of previous run
     if architecture in ("FFNN", "CNN", "LSTM", "Transformer"):
         logs_destination = '../data/' + model_name.split('.')[0] + '_tensorboard_logs'
         try:
@@ -712,15 +888,50 @@ def save_model(model, args):
         except Exception:
             print(f"Could not remove logs of previous run. Move of current logs "
                   f"from '../data/logs' to '{logs_destination}' failed.")
+            
     print('Model saved.\n')
 
 def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter):
-    """Testing the predictions of the model"""
+    """
+    Testing the predictions of the model.
+
+    The trained model is used to predict the data in `test_ds` and the results
+    are evaluated in regard to accuracy, precision, recall, etc. The calculated
+    metrics are printed to stdout.
+
+    Parameters
+    ----------
+    test_ds : CipherStatisticsDataset
+        The dataset used for prediction.
+    model :
+        The trained model to evaluate.
+    args :
+        The commandline arguments provided by the user.
+    early_stopping_callback :
+        Indicates whether the training was stopped before `args.max_iter` was 
+        reached. Used together with `train_iter` and `args.max_iter` to control 
+        the number of prediction iterations.
+    train_iter : int
+        The number of iterations used until the model converged. Used together with
+        `early_stopping_callback` and `args.max_iter` to control the number of 
+        prediction iterations.
+    
+    Returns
+    -------
+    str
+        The statistics of this prediction run.
+    """
+
     print('Predicting test data...\n')
+
     architecture = args.architecture
     start_time = time.time()
     total_len_prediction = 0
+    cntr = 0
+    test_iter = 0
+    test_epoch = 0
 
+    # Determine the number of iterations to use for evaluating the model
     prediction_dataset_factor = 10
     if early_stopping_callback.stop_training:
         while test_ds.dataset_workers * test_ds.batch_size > train_iter / prediction_dataset_factor and prediction_dataset_factor > 1:
@@ -730,11 +941,9 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
         while test_ds.dataset_workers * test_ds.batch_size > args.max_iter / prediction_dataset_factor and prediction_dataset_factor > 1:
             prediction_dataset_factor -= 1
         args.max_iter /= prediction_dataset_factor
-    cntr = 0
-    test_iter = 0
-    test_epoch = 0
 
-    # sample all predictions and labels for later use
+    # Initialize `PredictionPerformanceMetrics` instances for all classifiers. These
+    # are used to save and evaluate the batched prediction results of the models.
     prediction_metrics = {}
     if architecture == "[FFNN,NB]":
         prediction_metrics = {"FFNN": PredictionPerformanceMetrics(model_name="FFNN"),
@@ -825,7 +1034,7 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
     return prediction_stats
 
 def expand_cipher_groups(cipher_types):
-    """Turn cipher group identifiers (ACA, MTC3) into a list of their ciphers"""
+    """Turn cipher group identifiers (ACA, MTC3, ROTOR, ALL) into a list of their ciphers."""
     expanded = cipher_types
     if config.MTC3 in expanded:
         del expanded[expanded.index(config.MTC3)]
@@ -855,25 +1064,24 @@ def main():
     if cpu_count and cpu_count < args.dataset_workers:
         print("WARNING: More dataset_workers set than CPUs available.")
 
+    # Print arguments
     for arg in vars(args):
         print("{:23s}= {:s}".format(arg, str(getattr(args, arg))))
-
-    m = os.path.splitext(args.model_name)
-    if len(os.path.splitext(args.model_name)) != 2 or os.path.splitext(args.model_name)[1] != '.h5':
-        print('ERROR: The model name must have the ".h5" extension!', file=sys.stderr)
-        sys.exit(1)
 
     args.plaintext_input_directory = os.path.abspath(args.plaintext_input_directory)
     args.rotor_input_directory = os.path.abspath(args.rotor_input_directory)
     args.ciphers = args.ciphers.lower()
-    architecture = args.architecture
     cipher_types = args.ciphers.split(',')
-
-    extend_model = args.extend_model
     architecture = args.architecture
+    extend_model = args.extend_model
+
+    # Validate inputs
+    if len(os.path.splitext(args.model_name)) != 2 or os.path.splitext(args.model_name)[1] != '.h5':
+        print('ERROR: The model name must have the ".h5" extension!', file=sys.stderr)
+        sys.exit(1)
+
     if extend_model is not None:
         if architecture not in ('FFNN', 'CNN', 'LSTM'):
-            # TODO: Also holds for SVM, kNN?
             print('ERROR: Models with the architecture %s can not be extended!' % architecture,
                   file=sys.stderr)
             sys.exit(1)
@@ -881,7 +1089,6 @@ def main():
             print('ERROR: The extended model name must have the ".h5" extension!', file=sys.stderr)
             sys.exit(1)
 
-    cipher_types = expand_cipher_groups(cipher_types)
     if architecture == "SVM-Rotor" and cipher_types[0] != "rotor":
         print(f"When training rotor-only model, the argument `ciphers` "
               f"should equal 'rotor'. Selected ciphers are: '{cipher_types}'.")
@@ -894,19 +1101,24 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
-    if should_download_datasets(args):
-        download_datasets(args)
     # Convert commandline cipher argument (all, aca, mtc3, rotor, etc.) to list of 
     # all ciphers contained in the provided group. E.g. 'rotor' gets expanded
     # into 'enigma', 'm209', etc. 
     cipher_types = expand_cipher_groups(cipher_types)
 
+    # Ensure plaintext dataset is available at `args.plaintext_input_directory`.
+    if should_download_plaintext_datasets(args):
+        download_plaintext_datasets(args)
+
     # For the rotor-only model, load balanced set of great performing samples from the Paper
     # 'Classifying World War II Era Ciphers with Machine Learning' from Dalton and Stamp (in
     # the first 900 lines of each rotor ciphertext file) and a generated set of possibly more
-    # representative ciphertexts.
-    max_rotor_lines = 2000 if architecture == "SVM-Rotor" else 10000
+    # representative ciphertexts. For more information see `README.md` in 
+    # `data/rotor_ciphertexts/`.
+    max_rotor_lines = 2000 if architecture == "SVM-Rotor" else 5000 # TODO: 30000
 
+    # Load the datasets for the requested cipher types. If aca and rotor cipher types
+    # are contained in `cipher_types`, both plaintext and ciphertext datasets are loaded.
     train_ds, test_ds = load_datasets_from_disk(args, cipher_types, max_rotor_lines)
 
     # Get the number of cipher classes to predict. Since the label numbers are fixed, 

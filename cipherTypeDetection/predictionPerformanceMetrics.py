@@ -3,9 +3,14 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 import cipherTypeDetection.config as config
 
 class PredictionPerformanceMetrics:
-    """Helper class that allows for collection and evaluation of prediction metrics
-    for an machine learning architecture. It allows for the batched evaluation by
-    calling add_prediction multiple times."""
+    """
+    Helper class that allows for the collection and evaluation of predictions 
+    of an machine learning architecture. 
+    
+    This class samples the prediction results and labels of each batched prediction
+    and stores them for later evaluation. The evaluation metrics include accuracy, 
+    accuracy per class, precision, recall, f1 and mcc.
+    """
 
     def __init__(self, *, model_name):
         self.model_name = model_name

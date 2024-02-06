@@ -105,7 +105,7 @@ class EnsembleModel:
                 correct_all += 1
             if labels[i] in max_3_predictions:
                 correct_k3 += 1
-        if verbose == 1:
+        if verbose >= 1:
             print("Accuracy: %f" % (correct_all / len(prediction)))
             print("k3-Accuracy: %f" % (correct_k3 / len(prediction)))
         return (correct_all / len(prediction), correct_k3 / len(prediction))
