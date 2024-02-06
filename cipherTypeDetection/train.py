@@ -86,7 +86,6 @@ def create_model(architecture, extend_model, output_layer_size, max_train_len):
     ldi_stats = 0
 
     input_layer_size = 18 - 2 + total_frequencies_size + rotor_features + ldi_stats
-    output_layer_size = len(cipher_types) + len(config.ROTOR_CIPHER_TYPES)
     hidden_layer_size = int(2 * (input_layer_size / 3) + output_layer_size)
 
     # logistic regression baseline
