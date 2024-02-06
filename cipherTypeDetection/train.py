@@ -30,8 +30,9 @@ import tensorflow_datasets as tfds
 sys.path.append("../")
 from cipherTypeDetection.featureCalculations import calculate_histogram
 import cipherTypeDetection.config as config
+from cipherTypeDetection.trainingBatch import TrainingBatch
 from cipherImplementations.cipher import OUTPUT_ALPHABET
-from cipherTypeDetection.cipherStatisticsDataset import RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CipherStatisticsDataset, TrainingBatch
+from cipherTypeDetection.cipherStatisticsDataset import RotorCiphertextsDatasetParameters, PlaintextPathsDatasetParameters, CipherStatisticsDataset
 from cipherTypeDetection.predictionPerformanceMetrics import PredictionPerformanceMetrics
 from cipherTypeDetection.miniBatchEarlyStoppingCallback import MiniBatchEarlyStopping
 from cipherTypeDetection.transformer import TransformerBlock, TokenAndPositionEmbedding, MultiHeadSelfAttention
