@@ -143,6 +143,8 @@ KEY_LENGTHS = [[5,6,7,8], [5,6,7,8], [None]*4, [None]*4, [5,6,7,8], [5,6,7,8], [
                [5,6,7,8], [None]*4, [None]*4, [None]*4, [None]*4, [None]*4]
 MTC3 = 'mtc3'
 ACA = 'aca'
+ROTOR = 'rotor'
+ALL = "all"
 FEATURE_ENGINEERING = True
 PAD_INPUT = False
 
