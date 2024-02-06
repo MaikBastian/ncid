@@ -46,7 +46,7 @@ def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
 
-def create_model(architecture, extend_model, cipher_types, max_train_len):
+def create_model(architecture, extend_model, output_layer_size, max_train_len):
     optimizer = Adam(
         learning_rate=config.learning_rate, beta_1=config.beta_1, beta_2=config.beta_2, 
         epsilon=config.epsilon, amsgrad=config.amsgrad)
@@ -249,7 +249,7 @@ def parse_arguments():
                              'saved as interrupted_...')
     parser.add_argument('--model_name', default='m.h5', type=str,
                         help='Name of the output model file. The file must \nhave the .h5 extension.')
-    parser.add_argument('--ciphers', default='aca', type=str,
+    parser.add_argument('--ciphers', default='all', type=str,
                         help='A comma seperated list of the ciphers to be created.\n'
                              'Be careful to not use spaces or use \' to define the string.\n'
                              'Possible values are:\n'
@@ -257,6 +257,8 @@ def parse_arguments():
                              '        Columnar Transposition, Plaifair and Hill)\n'
                              '- aca (contains all currently implemented ciphers from \n'
                              '       https://www.cryptogram.org/resource-area/cipher-types/)\n'
+                             '- rotor (contains Enigma, M209, Purple, Sigaba and Typex ciphers)'
+                             '- all (contains aca and rotor ciphers)'
                              '- all aca ciphers in lower case'
                              '- simple_substitution\n'
                              '- vigenere\n'
@@ -347,31 +349,26 @@ def download_datasets(args):
 
 def load_rotor_ciphertext_datasets_from_disk(args, requested_cipher_types, *, max_lines_per_cipher):
     def validate_ciphertext_path(ciphertext_path, cipher_types):
+        """Check if the filename of the file at `ciphertext_path` matches the 
+        names inside `cipher_types`."""
         file_name = Path(ciphertext_path).stem.lower()
         if not file_name in cipher_types:
             raise Exception(f"Filename must equal one of the expected cipher types. "
-                            "Expected cipher types are: {cipher_types}. Current "
-                            "filename is '{file_name}'.")
+                            f"Expected cipher types are: {cipher_types}. Current "
+                            f"filename is '{file_name}'.")
     
-    # Check if all rotor ciphers are in the requested cipher_types. Otherwise return empty lists.
-    # TODO: Probably should change requested_cipher_type from indices to enums (aca, mct3, rotor, etc.)
+    # Filter cipher_types to exclude non-ciphertext ciphers
     rotor_cipher_types = [config.CIPHER_TYPES[i] for i in range(56, 61)]
-    for rotor_type in rotor_cipher_types:
-        if not rotor_type in requested_cipher_types:
-            empty_params = RotorCiphertextsDatasetParameters(config.ROTOR_CIPHER_TYPES, 
-                                                            0,
-                                                            args.dataset_workers, 
-                                                            args.min_train_len, 
-                                                            args.max_train_len,
-                                                            generate_evalutation_data=False)
-            return ([], empty_params, [], empty_params)
+    non_rotor_ciphers = [type for type in requested_cipher_types if type not in rotor_cipher_types]
+    cipher_types = [type for type in requested_cipher_types if type in rotor_cipher_types]
     
     rotor_cipher_dir = args.rotor_input_directory
     rotor_ciphertexts = []
     dir_name = os.listdir(rotor_cipher_dir)
     for name in dir_name:
         path = os.path.join(rotor_cipher_dir, name)
-        if os.path.isfile(path):
+        file_name, file_type = os.path.splitext(name)
+        if os.path.isfile(path) and file_name.lower() in cipher_types and file_type == ".txt":
             validate_ciphertext_path(path, config.ROTOR_CIPHER_TYPES)
             with open(path, "r") as f:
                 label = Path(path).stem.lower()
@@ -382,16 +379,28 @@ def load_rotor_ciphertext_datasets_from_disk(args, requested_cipher_types, *, ma
                     if max <= 0:
                         continue
                     rotor_ciphertexts.append((line.rstrip(), label))
+    # Return empty lists and parameters if no requested ciphers were found on disk
+    if len(rotor_ciphertexts) == 0:
+        empty_params = RotorCiphertextsDatasetParameters(config.ROTOR_CIPHER_TYPES, 
+                                                         0,
+                                                         args.dataset_workers, 
+                                                         args.min_train_len, 
+                                                         args.max_train_len,
+                                                         generate_evalutation_data=False)
+        return ([], empty_params, [], empty_params)
 
-    train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertexts, test_size=0.2, 
-                                                                       random_state=42, shuffle=True)
+    # Split the ciphertexts into a training and testing set
+    train_rotor_ciphertexts, test_rotor_ciphertexts = train_test_split(rotor_ciphertexts, 
+                                                                       test_size=0.2, 
+                                                                       random_state=42, 
+                                                                       shuffle=True)
 
     # Calculate batch size for rotor ciphers. If both aca and rotor ciphers are requested, 
     # the amount of samples of each rotor cipher per batch should be equal to the 
     # amount of samples of each aca cipher per loaded batch.
-    number_of_rotor_ciphers = len(config.ROTOR_CIPHER_TYPES)
-    number_of_aca_ciphers = len(requested_cipher_types) - number_of_rotor_ciphers
-    if number_of_aca_ciphers == 0:
+    number_of_rotor_ciphers = len(cipher_types)
+    number_of_aca_ciphers = len(non_rotor_ciphers) - number_of_rotor_ciphers
+    if number_of_aca_ciphers <= 0:
         rotor_dataset_batch_size = args.train_dataset_size
     else:
         amount_of_samples_per_cipher = args.train_dataset_size // number_of_aca_ciphers
@@ -413,18 +422,10 @@ def load_rotor_ciphertext_datasets_from_disk(args, requested_cipher_types, *, ma
     return (train_rotor_ciphertexts, train_rotor_ciphertexts_parameters, 
             test_rotor_ciphertexts, test_rotor_ciphertexts_parameters)
 
-def load_plaintext_datasets_from_disk(args, cipher_types):
     # Check if all aca ciphers are in the required cipher_types. Otherwise return empty lists.
+def load_plaintext_datasets_from_disk(args, requested_cipher_types):
     aca_cipher_types = [config.CIPHER_TYPES[i] for i in range(56)]
-    for aca_type in aca_cipher_types:
-        if not aca_type in cipher_types:
-            empty_params = PlaintextPathsDatasetParameters([], 
-                                                           args.train_dataset_size, 
-                                                           args.min_train_len, 
-                                                           args.max_train_len,
-                                                           args.keep_unknown_symbols, 
-                                                           args.dataset_workers)
-            return ([], empty_params, [], empty_params)
+    cipher_types = [type for type in requested_cipher_types if type in aca_cipher_types]
 
     plaintext_files = []
     dir_name = os.listdir(args.plaintext_input_directory)
@@ -445,8 +446,8 @@ def load_plaintext_datasets_from_disk(args, cipher_types):
     
     return (train_plaintexts, train_plaintext_parameters, test_plaintexts, test_plaintext_parameters)
 
-def load_datasets_from_disk(args, cipher_types, max_rotor_lines):
     """Loads datasets from the file system. 
+def load_datasets_from_disk(args, requested_cipher_types, max_rotor_lines):
     In case of the ACA ciphers the datasets are plaintext files that need to be
     encrypted before the features can be extracted.
     In case of the rotor ciphers there are already encrypted ciphertext files 
@@ -457,11 +458,14 @@ def load_datasets_from_disk(args, cipher_types, max_rotor_lines):
     (train_plaintexts, 
      train_plaintext_parameters, 
      test_plaintexts, 
-     test_plaintext_parameters) = load_plaintext_datasets_from_disk(args, cipher_types)
+     test_plaintext_parameters) = load_plaintext_datasets_from_disk(args, 
+                                                                    requested_cipher_types)
     (train_rotor_ciphertexts, 
      train_rotor_ciphertexts_parameters, 
      test_rotor_ciphertexts, 
-     test_rotor_ciphertexts_parameters) = load_rotor_ciphertext_datasets_from_disk(args, cipher_types, max_lines_per_cipher=max_rotor_lines)
+     test_rotor_ciphertexts_parameters) = load_rotor_ciphertext_datasets_from_disk(args, 
+                                                                                   requested_cipher_types, 
+                                                                                   max_lines_per_cipher=max_rotor_lines)
 
     train_ds = CipherStatisticsDataset(train_plaintexts, train_plaintext_parameters, train_rotor_ciphertexts, train_rotor_ciphertexts_parameters)
     test_ds = CipherStatisticsDataset(test_plaintexts, test_plaintext_parameters, test_rotor_ciphertexts, test_rotor_ciphertexts_parameters)
@@ -473,7 +477,7 @@ def load_datasets_from_disk(args, cipher_types, max_rotor_lines):
     print("Datasets loaded.\n")
     return train_ds, test_ds
     
-def create_model_with_distribution_strategy(architecture, extend_model, cipher_types, max_train_len):
+def create_model_with_distribution_strategy(architecture, extend_model, output_layer_size, max_train_len):
     """Creates models depending on the GPU count and on extend_model"""
     print('Creating model...')
 
@@ -484,13 +488,13 @@ def create_model_with_distribution_strategy(architecture, extend_model, cipher_t
         with strategy.scope():
             if extend_model is not None:
                 extend_model = tf.keras.models.load_model(extend_model, compile=False)
-            model = create_model(architecture, extend_model, cipher_types, max_train_len)
+            model = create_model(architecture, extend_model, output_layer_size, max_train_len)
         if architecture in ("FFNN", "CNN", "LSTM", "Transformer") and extend_model is None:
             model.summary()
     else:
         if extend_model is not None:
             extend_model = tf.keras.models.load_model(extend_model, compile=False)
-        model = create_model(architecture, extend_model, cipher_types, max_train_len)
+        model = create_model(architecture, extend_model, output_layer_size, max_train_len)
         if architecture in ("FFNN", "CNN", "LSTM", "Transformer") and extend_model is None:
             model.summary()
 
@@ -831,6 +835,14 @@ def expand_cipher_groups(cipher_types):
         del expanded[expanded.index(config.ACA)]
         for i in range(56):
             expanded.append(config.CIPHER_TYPES[i])
+    elif config.ROTOR in expanded:
+        del expanded[expanded.index(config.ROTOR)]
+        for i in range(56, 61):
+            expanded.append(config.CIPHER_TYPES[i])
+    elif config.ALL in expanded:
+        del expanded[expanded.index(config.ALL)]
+        for i in range(61):
+            expanded.append(config.CIPHER_TYPES[i])
     return expanded
 
 def main():
@@ -870,8 +882,10 @@ def main():
             sys.exit(1)
 
     cipher_types = expand_cipher_groups(cipher_types)
-    if architecture == "SVM-Rotor":
-        cipher_types = [config.CIPHER_TYPES[i] for i in range(56, 61)]
+    if architecture == "SVM-Rotor" and cipher_types[0] != "rotor":
+        print(f"When training rotor-only model, the argument `ciphers` "
+              f"should equal 'rotor'. Selected ciphers are: '{cipher_types}'.")
+        sys.exit(1)
 
     if args.train_dataset_size * args.dataset_workers > args.max_iter:
         print("ERROR: --train_dataset_size * --dataset_workers must not be bigger than --max_iter. "
@@ -882,6 +896,10 @@ def main():
 
     if should_download_datasets(args):
         download_datasets(args)
+    # Convert commandline cipher argument (all, aca, mtc3, rotor, etc.) to list of 
+    # all ciphers contained in the provided group. E.g. 'rotor' gets expanded
+    # into 'enigma', 'm209', etc. 
+    cipher_types = expand_cipher_groups(cipher_types)
 
     # For the rotor-only model, load balanced set of great performing samples from the Paper
     # 'Classifying World War II Era Ciphers with Machine Learning' from Dalton and Stamp (in
@@ -891,9 +909,17 @@ def main():
 
     train_ds, test_ds = load_datasets_from_disk(args, cipher_types, max_rotor_lines)
 
-    # ACA ciphers
-    model = create_model_with_distribution_strategy(architecture, extend_model, 
-                                                    cipher_types, args.max_train_len)
+    # Get the number of cipher classes to predict. Since the label numbers are fixed, 
+    # it must be ensured that the output_layer_size of the neural networks contain 
+    # enough nodes upto the higest wanted class label.
+    output_layer_size = max([config.CIPHER_TYPES.index(type) for type in cipher_types]) + 1
+
+    # Create a model and allow for distributed training on multi-GPU machines
+    model = create_model_with_distribution_strategy(architecture, 
+                                                    extend_model, 
+                                                    output_layer_size=output_layer_size, 
+                                                    max_train_len=args.max_train_len)
+    
     early_stopping_callback, train_iter, training_stats = train_model(model, args, train_ds)
     save_model(model, args)
     prediction_stats = predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
