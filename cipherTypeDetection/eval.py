@@ -128,7 +128,7 @@ def benchmark(args, model, architecture):
         batches = next(dataset)
         
         for index, batch in enumerate(batches):
-            statistics, labels, ciphertexts = batch.tuple()
+            statistics, labels, ciphertexts = batch.items()
 
             if architecture == "FFNN":
                 results.append(model.evaluate(statistics, labels, batch_size=args.batch_size, verbose=1))

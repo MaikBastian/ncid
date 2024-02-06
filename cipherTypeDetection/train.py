@@ -565,7 +565,7 @@ def train_model(model, args, train_ds):
             training_batches = [combined_batch]
 
         for index, training_batch in enumerate(training_batches):
-            statistics, labels = training_batch.tuple()
+            statistics, labels = training_batch.items()
             train_iter = train_ds.iteration - len(training_batch) * (len(training_batches) - index - 1)
 
             # Create small validation dataset on first iteration
@@ -764,7 +764,7 @@ def predict_test_data(test_ds, model, args, early_stopping_callback, train_iter)
             testing_batches = [combined_batch]
 
         for testing_batch in testing_batches:
-            statistics, labels = testing_batch.tuple()
+            statistics, labels = testing_batch.items()
             
             # Decision Tree, Naive Bayes prediction
             if architecture in ("DT", "NB", "RF", "ET", "SVM", "kNN"):
