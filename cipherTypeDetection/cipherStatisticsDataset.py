@@ -211,6 +211,8 @@ class CipherStatisticsDataset:
         # Get all results of this iteration
         all_results = self._wait_for_results(number_of_processes=combined_process_count)
 
+        assert len(all_results) > 0, "Results are empty. Were the datasets initialized?"
+
         # If a dataset is not initalized: No need to mix ciphertext and plaintext results. 
         # Simply return all results of this iteration.
         if not self.both_datasets_initialized:
