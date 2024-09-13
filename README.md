@@ -2,15 +2,17 @@
 
 A neural network to detect and analyze ciphers from historical texts.
 
-# NCID- Neural Cipher IDentifier
+# NCID - Neural Cipher IDentifier
 
-This project contains code for the detection and classification of ciphers to classical algorithms by using a neural network. In the future other parts of the cryptanalysis will be implemented. An online version of the neural networks will be officially published on https://www.cryptool.org/en/cto/ncid.
+This project contains code for training machine learning models for the detection and classification of classical ciphers. CrypTool-Online provides a webapp that uses the trained models to classify ciphertexts: https://www.cryptool.org/cto/ncid.
 
 While the project was focused on ACA ciphers at first, a later extension added the possibility to detect the rotor ciphers Enigma, M209, Purple, Sigaba, and Typex.
 
+Users that are experienced in machine learning can use the tools provided in this project to train and evaluate ML models using the `train.py` and `eval.py` scripts. For further information see the following sections *Training* and *Evaluation*. 
+
 # License
 
-This software and the online version on https://www.cryptool.org/ncid are licensed with the GPLv3 license. Private use of this software is allowed. Software using parts of the code from this repository must not be commercially used and also must be GPLv3 licensed.
+This software and the online version on https://www.cryptool.org/cto/ncid are licensed with the GPLv3 license. Private use of this software is allowed. Software using parts of the code from this repository must not be commercially used and also must be GPLv3 licensed.
 
 Publications on websites and the like MUST be explicitly allowed by the author. For further information contact me at leierzopf@ins.jku.at.
 
@@ -22,47 +24,48 @@ Publications on websites and the like MUST be explicitly allowed by the author. 
   cd ncid
   ```
 
-- Install the recommended and tested versions by using requirements.txt:
+- Make sure to use at least Python 3.11.
+
+- Install the recommended and tested libraries by using requirements.txt:
 
   ```
   pip3 install -r requirements.txt
   ```
 
-# Data Preparation
+# Training
 
-## Generate Plaintexts (Optional)
+By default we train the models to identify ACA ciphers listed [here](https://www.cryptogram.org/resource-area/cipher-types/), as well as 5 rotor ciphers: Enigma, M209, Purple, Sigaba, and Typex. The plaintexts used are already filtered and automatically downloaded in the train.py or eval.py scripts.  You can turn off this behavior by setting `--download_dataset=False`. For more information about handling of custom datasets see: *Data Preparation*. The rotor ciphers need pre-generated ciphertexts to work. These can be generated with CrypTool 2. To limit the cipher types to train, the option `--ciphers` can e.g. be set to `aca`, `rotor` or `all`.
 
-First of all this usage is not recommended as first option. Try running the `train.py` or `eval.py` script with the argument `--download_dataset=True`, if you only want to train or test on the filtered dataset. Optionally you can download the dataset on your own from [here](https://drive.google.com/open?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V)
-
-If you'd like to create your own plaintexts, you can use the `generatePlainTextFiles.py` script. Therefore you first need to download some texts, for example the Gutenberg Library. You can do that by using following command, which downloads all English e-books compressed with zip.  Note that this script can take a while and dumps about 14gb of files into `./data/gutenberg_en` and 5.3gb additionaly if you do not delete the `gutenberg_en.zip`.
-
-```shell
-wget -m -H -nd "http://www.gutenberg.org/robot/harvest?filetypes[]=txt&langs[]=en" -e use_proxy=yes -e http_proxy=46.101.1.221:80 > /tmp/wget-log 2>&1
-```
-
-The `generatePlainTextFiles.py` script automatically unpacks the zips, with the parameter `--restructure_directory`.  Every line in a plaintext is seperated by a '\n', so be sure to save it in the right format or use the `generatePlainTextFiles.py` script to reformat all files from '\r\n' to '\n'. For further description read the help by using the `--help` parameter. Example usage:
+To see all options of `train.py`, run the `--help` or `-h` command.
 
 ```
-python3 generatePlainTextFiles.py --directory=../gutenberg_en --restructure_directory=true
+python3 train.py --help
 ```
 
-## Generate ACA Ciphertexts (Optional)
+## Example Commands
 
-You might want to predict with one or more models by using the same ciphertext files. The `generateCipherTextFiles.py` script encrypts plaintext files to multiple ciphertext files. The naming convention is *fileName-cipherType-minLenXXX-maxLenXXX-keyLenXX.txt*. This script generates ciphertexts out of plaintexts. **Beware:** Currently only ACA ciphertexts can be generated. To generate ciphertexts for rotor ciphers, an external tool (like CrypTool 2) has to be used. 
+- ```
+  python3 train.py --dataset_workers=50 --train_dataset_size=64960 --batch_size=512 --max_iter=1000000000 --min_train_len=100 --max_train_len=100 --min_test_len=100 --max_test_len=100 --model_name=t30.h5 > weights/t30.txt 2> weights/err_t30.txt &
+  ```
 
-If a line is not long enough it is concatenated with the next line. If a line is too long it is sliced into max_text_len length. For further description read the help by using the `--help` parameter. Example usage:
+- ```
+  python3 train.py --model_name=mtc3_model.h5 --ciphers=mtc3  # first config.py must be adapted
+  ```
 
-```
-python3 generateCipherTextFiles.py --min_text_len=100 --max_text_len=100 --max_files_count=100
-```
+- ```
+  python3 train.py --architecture=FFNN --dataset_workers=50 --train_dataset_size=64960 --batch_size=512 --max_iter=1000000000 --min_train_len=100 --max_train_len=100 --min_test_len=100 --max_test_len=100 --model_name=t30.h5 > weights/t30.txt 2> weights/err_t30.txt &
+  ```
 
-## Generate Calculated Features (Optional)
 
-To evaluate multiple models in the most comparable way, the features and ciphertexts are precalculated and saved into files using the `generateCalculatedFeatures.py` script.
+## Multi-GPU Support
 
-```
-python3 generateCalculatedFeatures.py --dataset_workers=50 --min_len=100 --max_len=100 --save_directory=../data/generated_data --batch_size=512 --dataset_size=64960 --max_iter=10000000 > ../data/generate_data.txt 2> ../data/err_generate_data.txt
-```
+NCID now supports multiple GPUs seamlessly during training:
+
+Before running any of the scripts, run: `export CUDA_VISIBLE_DEVICES=[gpus]`
+
+- Where you should replace [gpus] with a comma separated list of the index of each GPU you want to use (e.g., 0,1,2,3).
+- You should still do this if only using 1 GPU.
+- You can check the indices of your GPUs with `nvidia-smi`.
 
 # Evaluation
 
@@ -118,40 +121,43 @@ To see all options of `eval.py`, run the `--help` or `-h` command.
 python3 eval.py --help
 ```
 
-# Training
+# Data Preparation
 
-By default we train the models to identify ACA ciphers listed [here](https://www.cryptogram.org/resource-area/cipher-types/), as well as 5 rotor ciphers: Enigma, M209, Purple, Sigaba, and Typex. The plaintexts used are already filtered and automatically downloaded in the train.py or eval.py scripts.  You can turn off this behavior by setting `--download_dataset=False`. The rotor ciphers need pre-generated ciphertexts to work. These can be generated with CrypTool 2. To limit the cipher types to train, the option `--ciphers` can be set to `aca`, `rotor` or `all`, e.g.
+Note: The following steps are only needed when the automatic downloading and preprocessing steps of the `train.py` or `eval.py` scripts fail or other data sources are wanted.
 
-To see all options of `train.py`, run the `--help` or `-h` command.
+## Generate Plaintexts (Optional)
+
+First of all this usage is not recommended as first option. Try running the `train.py` or `eval.py` script with the argument `--download_dataset=True`, if you only want to train or test on the filtered dataset. Optionally you can download the dataset on your own from [here](https://drive.google.com/open?id=1bF5sSVjxTxa3DB-P5wxn87nxWndRhK_V)
+
+If you'd like to create your own plaintexts, you can use the `generatePlainTextFiles.py` script. Therefore you first need to download some texts, for example the Gutenberg Library. You can do that by using following command, which downloads all English e-books compressed with zip.  Note that this script can take a while and dumps about 14gb of files into `./data/gutenberg_en` and 5.3gb additionaly if you do not delete the `gutenberg_en.zip`.
+
+```shell
+wget -m -H -nd "http://www.gutenberg.org/robot/harvest?filetypes[]=txt&langs[]=en" > /tmp/wget-log 2>&1
+```
+
+The `generatePlainTextFiles.py` script automatically unpacks the zips, with the parameter `--restructure_directory`.  Every line in a plaintext is seperated by a '\n', so be sure to save it in the right format or use the `generatePlainTextFiles.py` script to reformat all files from '\r\n' to '\n'. For further description read the help by using the `--help` parameter. Example usage:
 
 ```
-python3 train.py --help
+python3 generatePlainTextFiles.py --directory=../gutenberg_en --restructure_directory=true
 ```
 
-## Example Commands
+## Generate ACA Ciphertexts (Optional)
 
-- ```
-  python3 train.py --dataset_workers=50 --train_dataset_size=64960 --batch_size=512 --max_iter=1000000000 --min_train_len=100 --max_train_len=100 --min_test_len=100 --max_test_len=100 --model_name=t30.h5 > weights/t30.txt 2> weights/err_t30.txt &
-  ```
+You might want to predict with one or more models by using the same ciphertext files. The `generateCipherTextFiles.py` script encrypts plaintext files to multiple ciphertext files. The naming convention is *fileName-cipherType-minLenXXX-maxLenXXX-keyLenXX.txt*. This script generates ciphertexts out of plaintexts. **Beware:** Currently only ACA ciphertexts can be generated. To generate ciphertexts for rotor ciphers, an external tool (like CrypTool 2) has to be used. 
 
-- ```
-  python3 train.py --model_name=mtc3_model.h5 --ciphers=mtc3  # first config.py must be adapted
-  ```
+If a line is not long enough it is concatenated with the next line. If a line is too long it is sliced into max_text_len length. For further description read the help by using the `--help` parameter. Example usage:
 
-- ```
-  python3 train.py --architecture=FFNN --dataset_workers=50 --train_dataset_size=64960 --batch_size=512 --max_iter=1000000000 --min_train_len=100 --max_train_len=100 --min_test_len=100 --max_test_len=100 --model_name=t30.h5 > weights/t30.txt 2> weights/err_t30.txt &
-  ```
+```
+python3 generateCipherTextFiles.py --min_text_len=100 --max_text_len=100 --max_files_count=100
+```
 
+## Generate Calculated Features (Optional)
 
-## Multi-GPU Support
+To evaluate multiple models in the most comparable way, the features and ciphertexts are precalculated and saved into files using the `generateCalculatedFeatures.py` script.
 
-NCID now supports multiple GPUs seamlessly during training:
-
-Before running any of the scripts, run: `export CUDA_VISIBLE_DEVICES=[gpus]`
-
-- Where you should replace [gpus] with a comma separated list of the index of each GPU you want to use (e.g., 0,1,2,3).
-- You should still do this if only using 1 GPU.
-- You can check the indices of your GPUs with `nvidia-smi`.
+```
+python3 generateCalculatedFeatures.py --dataset_workers=50 --min_len=100 --max_len=100 --save_directory=../data/generated_data --batch_size=512 --dataset_size=64960 --max_iter=10000000 > ../data/generate_data.txt 2> ../data/err_generate_data.txt
+```
 
 # Unit-Tests
 
