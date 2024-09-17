@@ -14,7 +14,7 @@ Users that are experienced in machine learning can use the tools provided in thi
 
 This software and the online version on https://www.cryptool.org/cto/ncid are licensed with the GPLv3 license. Private use of this software is allowed. Software using parts of the code from this repository must not be commercially used and also must be GPLv3 licensed.
 
-Publications on websites and the like MUST be explicitly allowed by the author. For further information contact me at leierzopf@ins.jku.at.
+Publications on websites and the like MUST be explicitly allowed by the author. For further information contact me at ernst.leierzopf@ins.jku.at.
 
 # Installation
 
